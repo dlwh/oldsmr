@@ -1,0 +1,38 @@
+<project name="smud" default="compile" basedir=".">
+  <property name="src.dir" value="src/"/>
+  <property name="build.dir" value="classes"/>
+
+  <property name="repository.home" value="/opt/local/share/"/>
+  <property name="scala-compiler.jar" value="${repository.home}/scala/lib/scala-compiler.jar"/>
+  <property name="scala-library.jar" value="${repository.home}/scala/lib/scala-library.jar"/>
+
+  <!-- 2. Define Scala CLASSPATH. -->
+
+  <path id="scala.classpath">
+    <pathelement location="${scala-compiler.jar}"/>
+    <pathelement location="${scala-library.jar}"/>
+  </path>
+
+  <!-- 3. Define project CLASSPATH. -->
+
+  <path id="project.classpath">
+    <path refid="scala.classpath"/>
+
+    <pathelement location="${build.dir}"/>
+  </path>
+
+  <!-- 4. Define scala compiler command. -->
+
+  <taskdef resource="scala/tools/ant/antlib.xml">
+    <classpath refid="scala.classpath"/>
+  </taskdef>
+  <!-- 5. Compiles sources by using "scalac" command. -->
+
+  <target name="compile">
+    <mkdir dir="${build.dir}"/>
+
+    <fsc srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
+      <include name="**/*.scala"/>
+    </fsc>
+  </target>
+</project>
