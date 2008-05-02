@@ -29,28 +29,21 @@ private object Priv {
 import Priv._;
 
 trait DistributedIterable[+T] extends Iterable[T] {
-    def shard : List[Iterable[T]];
+  override def map[B](f : T=>B) : DistributedIterable[B];
+  def reduce[B >: T](f : (B,B)=>B) : B;
 }
 
 class ActorDistributor(numWorkers : Int) extends Distributor {
   override def distribute[T] (it : Iterable[T])
-      (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new DistributedIterable[T] {
-        def elements = it.elements
-        def shard = myShard(it);
-        override def map[U](f : T => U) : Iterable[U] = new Iterable[U]{
-          private val id = schedule(it,(x : Iterable[T]) => x.map(f))(myShard)
-          def elements = {
-            val b = new scala.collection.mutable.ArrayBuffer[(Int,Iterable[U])]
-            gather[Iterable[U]](id,{ (x : Int, y :Iterable[U]) =>
-              b+= (x,y)
-            })
-            b.toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
-          }
-        }
-
+      (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
+        protected lazy val id : JobID = shard(it)(myShard);
       };
 
-  def schedule[T,U](it : Iterable[T], f: Iterable[T]=>U)(implicit myShard : Iterable[T]=>List[Iterable[T]]) = (scheduler !? Sched(it,myShard,f)).asInstanceOf[JobID];
+  // pushes data onto the grid
+  def shard[T](it : Iterable[T])(implicit myShard : Iterable[T]=>List[Iterable[T]]) = (scheduler !?Shard(it,myShard)).asInstanceOf[JobID];
+  // runs a task on some data on the grid
+  def schedule[T,U](id : JobID, f: Iterable[T]=>U) = (scheduler !? Sched(id,f.asInstanceOf[Any=>Any])).asInstanceOf[JobID];
+  // gets it back using some function
   def gather[U](job : JobID, gather: (Int,U)=>Unit) :Unit = (scheduler !? Get(job,gather));
 
   // Every job needs an id:
@@ -58,13 +51,16 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
 
   // Messages to the scheduler from the disributor
   private sealed case class SchedMsg;
-  private case class Sched[T,U](it : Iterable[T], shard : Iterable[T]=>List[Iterable[T]], f : Iterable[T]=>U) extends SchedMsg;
+  private case class Shard[T](it : Iterable[T], shard : Iterable[T]=>List[Iterable[T]]) extends SchedMsg;
+  private case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
   private case class Get[U](job : JobID, gatherer : (Int,U)=>Unit) extends SchedMsg;
 
   private sealed case class WorkerMsg;
   private case class Do(id : JobID, shard : Int, f : Unit=>Any) extends WorkerMsg;
   private case class Retrieve(id : JobID, f : ((Int,Any))=>Unit) extends WorkerMsg;
   private case class DoneAdding(id : JobID) extends WorkerMsg;
+  private case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
+  private case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
 
 
   private val scheduler = actor {
@@ -77,7 +73,6 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
           workers.foreach{ _ ! Retrieve(id,{(x : (Int,Any)) => s ! x})}
           for(val i <- 1 to numShards) receive {
             case x : (Int,Any) => f(x._1,x._2.asInstanceOf[U]) 
-            println(3);
           }
           reply{ None}
         }
@@ -87,7 +82,7 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
     var nextJob : JobID =0
     loop { 
       react {
-        case Sched(it,shard,f)=> 
+        case Shard(it,shard)=> 
         val job = nextJob; nextJob +=1; 
         actor { 
           react {
@@ -95,9 +90,26 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
             val shards = shard(it)
             numShards += (job -> shards.length);
             shards.zipWithIndex.foreach {
-              x => workers(x._2 % numWorkers) ! Do(job,x._2, (Unit) => f(x._1))
+              x => workers(x._2 % numWorkers) ! Done(job,x._2,x._1)
             }
             workers.foreach { _ ! DoneAdding(job) }
+            reply { job }
+          }
+        }.forward(None)
+        case Sched(in,f)=> 
+        val job = nextJob; nextJob +=1; 
+        actor { 
+          react {
+            case _ =>
+            val oldNumShards = numShards.get(in).get;
+            numShards += (job -> oldNumShards);
+            (0 until oldNumShards).foreach { x => workers(x%numWorkers) ! Reserve(job,x)}
+            workers.foreach { a =>  
+              a ! DoneAdding(job)
+              a ! Retrieve(in, {
+                (x : (Int,Any)) => a ! Do(job,x._1,(Unit) => f(x._2))
+              })
+            }
             reply { job }
           }
         }.forward(None)
@@ -107,7 +119,6 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
   }
 
   // intra worker communication:
-  private case class Done(id : JobID, shard : Int,  result : Any);
   private case class Add(shard : Int); 
 
   private val workers = {
@@ -120,22 +131,21 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
             react {
              case  Do(id,s,f) => 
              manager ! Done(id,s,f()) 
-             println("x");
             }
           }
         }
         loop {
           react {
             case Do(id,s,f) => 
-              accumulators.getOrElseUpdate(id,accumulator()) ! Add(s); 
-              actual_worker ! Do(id,s,f)
+              actual_worker ! Do(id,s,f);
             case Done(id,s,r)=> 
               accumulators.getOrElseUpdate(id,accumulator()) ! Done(id,s,r);
             case DoneAdding(id) => 
-            println("z");
               accumulators.getOrElseUpdate(id,accumulator()) ! DoneAdding(id);
             case Retrieve(id,f) => 
               accumulators.getOrElseUpdate(id,accumulator()) forward Retrieve(id,f);
+            case Reserve(id,shard) => 
+              accumulators.getOrElseUpdate(id,accumulator()) ! Add(shard);
           }
         }
       }
@@ -148,34 +158,27 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
     var doneAdding = false;
     loop {
       react {
-        case Retrieve(id,f) => val a =  actor {
+        case Retrieve(id,f) => 
+        val a =  actor {
           react {
             case None =>
-            println("w1");
             react {
               case DoneAdding(_) => 
-              println("w2");
               done.foreach(f)
             } 
           }
         }
-        println("w" + " " + doneAdding + " " + Actor.self);
         a ! None
-        if(doneAdding) a !  DoneAdding(0);
+        if(doneAdding && active.size == 0) a !  DoneAdding(0);
         awaiting += a
         case DoneAdding(_) => 
         doneAdding = true;
-        println("a" + " " + doneAdding + " " + Actor.self);
         if(active.size == 0) {
           awaiting.foreach(_ ! DoneAdding(0));
         }
         case Add(s) => 
-          println(Add(s));
           active += s //todo, signal if doneAdding was called.
         case Done(x,s,r) => 
-          println(Done(x,s,r));
-            println("y " + s);
-          // todo: signal if doneAdding was called.
           active -= s; 
           done += (s->r);
           if(doneAdding && active.size == 0) {
@@ -185,6 +188,23 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
     }
   }
 
-  private abstract class InternalIterable[+T](val id : JobID) extends DistributedIterable[T] {
+  trait InternalIterable[T] extends DistributedIterable[T] {
+    protected val id : JobID;
+    def elements = {
+      val b = new scala.collection.mutable.ArrayBuffer[(Int,Iterable[T])]
+      gather[Iterable[T]](id,{ (x : Int, y :Iterable[T]) => b+= (x,y) })
+      b.toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
+    }
+    override def map[U](f : T=>U) : DistributedIterable[U] = {
+      val outer = id;
+      new InternalIterable[U] {
+        protected val id = schedule(outer,(x : Iterable[T]) => x.map(f))
+      }
+    }
+   override def reduce[B >: T](f : (B,B)=>B) : B = {
+      val b = new scala.collection.mutable.ArrayBuffer[(Int,B)]
+      gather[Iterable[T]](id,{ (x : Int, y :Iterable[T]) =>  b += ( x -> y.reduceLeft(f)) })
+      b.toList.sort(_._1 < _._1).map( (x : (Int,B)) => x._2).reduceLeft(f);
+    }
   }
 }
