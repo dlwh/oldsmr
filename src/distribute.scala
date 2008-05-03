@@ -11,36 +11,27 @@ trait Distributor {
 
 sealed case class NumShards(n : Int);
 
-object defaults {
-  implicit val defaultNumShards = NumShards(5);
-
-  implicit def  shard[T] (it : Iterable[T])(implicit numShards : NumShards) : List[Iterable[T]] = it match {
-    case x : Range.Inclusive => shardIRange(x.asInstanceOf[Range.Inclusive])(numShards).asInstanceOf[List[Iterable[T]]];
-    case x : Range=> shardRange(x.asInstanceOf[Range])(numShards).asInstanceOf[List[Iterable[T]]];
-    case _ =>
-    val arrs = new ArrayBuffer[ArrayBuffer[T]]
-    arrs ++= (for(val i <- 1 to numShards.n) yield new ArrayBuffer[T]);
-    val elems = it.elements
-    var i = 0;
-    while(elems.hasNext) { arrs(i%numShards.n) += elems.next; i += 1}
-    arrs.toList
-  }
-
-  implicit def shardRange (r : Range)(implicit numShards : NumShards) : List[Iterable[Int]]=  {
-    val arrs = new ArrayBuffer[Range]
-    val n = numShards.n;
-    arrs ++= (for(val i<- 0 until n) yield new Range(r.start + i * r.step,r.end,n * r.step));
-    arrs.toList
-  }
-  implicit def shardIRange (r : Range.Inclusive)(implicit numShards : NumShards) : List[Iterable[Int]]= {
-    val arrs = new ArrayBuffer[Range.Inclusive]
-    val n = numShards.n;
-    arrs ++= (for(val i<- 0 until n) yield new Range.Inclusive(r.start + i * r.step ,r.end,n * r.step));
-    arrs.toList
-  }
+object Public {
+// Every job needs an id:
+type JobID = Int;
 }
+import Public._;
 
 private object Priv {
+
+  // Messages to the scheduler from the disributor
+  private[smr] sealed case class SchedMsg;
+  private[smr] case class Shard[T](it : Iterable[T], shard : Iterable[T]=>List[Iterable[T]]) extends SchedMsg;
+  private[smr] case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
+  private[smr] case class Get[U](job : JobID, gatherer : (Int,U)=>Unit) extends SchedMsg;
+  private[smr] case class Remove[U](job : JobID) extends SchedMsg;
+
+  private[smr] sealed case class WorkerMsg;
+  private[smr] case class Do(id : JobID, shard : Int, f : Unit=>Any) extends WorkerMsg;
+  private[smr] case class Retrieve(id : JobID, f : ((Int,Any))=>Unit) extends WorkerMsg;
+  private[smr] case class DoneAdding(id : JobID) extends WorkerMsg;
+  private[smr] case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
+  private[smr] case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
 }
 import Priv._;
 
@@ -61,23 +52,8 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
   def schedule[T,U](id : JobID, f: Iterable[T]=>U) = (scheduler !? Sched(id,f.asInstanceOf[Any=>Any])).asInstanceOf[JobID];
   // gets it back using some function
   def gather[U](job : JobID, gather: (Int,U)=>Unit) :Unit = (scheduler !? Get(job,gather));
-
-  // Every job needs an id:
-  type JobID = Int;
-
-  // Messages to the scheduler from the disributor
-  private sealed case class SchedMsg;
-  private case class Shard[T](it : Iterable[T], shard : Iterable[T]=>List[Iterable[T]]) extends SchedMsg;
-  private case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
-  private case class Get[U](job : JobID, gatherer : (Int,U)=>Unit) extends SchedMsg;
-
-  private sealed case class WorkerMsg;
-  private case class Do(id : JobID, shard : Int, f : Unit=>Any) extends WorkerMsg;
-  private case class Retrieve(id : JobID, f : ((Int,Any))=>Unit) extends WorkerMsg;
-  private case class DoneAdding(id : JobID) extends WorkerMsg;
-  private case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
-  private case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
-
+  // gets rid of it:
+  def remove(job : JobID) : Unit = (scheduler ! Remove(job));
 
   private val scheduler = actor {
     // helper method to please the type system
@@ -88,7 +64,7 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
           val s = Actor.self
           workers.foreach{ _ ! Retrieve(id,{(x : (Int,Any)) => s ! x})}
           for(val i <- 1 to numShards) receive {
-            case x : (Int,Any) => f(x._1,x._2.asInstanceOf[U]) 
+            case x : Tuple2[_,_] => f(x._1.asInstanceOf[Int],x._2.asInstanceOf[U]) 
           }
           reply{ None}
         }
@@ -130,78 +106,14 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
           }
         }.forward(None)
         case Get(id,f)=> handle_get(id,numShards.get(id).get,f) // please the type system
+        case Remove(id) => workers.foreach{ _ ! Remove(id)}
       }
     }
   }
-
-  // intra worker communication:
-  private case class Add(shard : Int); 
 
   private val workers = {
     for (val i <- List.range(0,numWorkers))
-      yield actor {
-        val accumulators = mutable.Map[JobID,Actor]();
-        val manager = Actor.self;
-        val actual_worker = actor { 
-          loop {
-            react {
-             case  Do(id,s,f) => 
-             manager ! Done(id,s,f()) 
-            }
-          }
-        }
-        loop {
-          react {
-            case Do(id,s,f) => 
-              actual_worker ! Do(id,s,f);
-            case Done(id,s,r)=> 
-              accumulators.getOrElseUpdate(id,accumulator()) ! Done(id,s,r);
-            case DoneAdding(id) => 
-              accumulators.getOrElseUpdate(id,accumulator()) ! DoneAdding(id);
-            case Retrieve(id,f) => 
-              accumulators.getOrElseUpdate(id,accumulator()) forward Retrieve(id,f);
-            case Reserve(id,shard) => 
-              accumulators.getOrElseUpdate(id,accumulator()) ! Add(shard);
-          }
-        }
-      }
-  }
-
-  private def accumulator() = actor {
-    val active = mutable.Set[Int]();
-    val done = mutable.Map[Int,Any]();
-    val awaiting = new ArrayBuffer[Actor]();
-    var doneAdding = false;
-    loop {
-      react {
-        case Retrieve(id,f) => 
-        val a =  actor {
-          react {
-            case None =>
-            react {
-              case DoneAdding(_) => 
-              done.foreach(f)
-            } 
-          }
-        }
-        a ! None
-        if(doneAdding && active.size == 0) a !  DoneAdding(0);
-        awaiting += a
-        case DoneAdding(_) => 
-        doneAdding = true;
-        if(active.size == 0) {
-          awaiting.foreach(_ ! DoneAdding(0));
-        }
-        case Add(s) => 
-          active += s //todo, signal if doneAdding was called.
-        case Done(x,s,r) => 
-          active -= s; 
-          done += (s->r);
-          if(doneAdding && active.size == 0) {
-            awaiting.foreach(_ ! DoneAdding(0));
-          }
-      }
-    }
+      yield Worker();
   }
 
   trait InternalIterable[T] extends DistributedIterable[T] {
@@ -217,10 +129,29 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
         protected val id = schedule(outer,(x : Iterable[T]) => x.map(f))
       }
     }
-   override def reduce[B >: T](f : (B,B)=>B) : B = {
+    override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = {
+      val outer = id;
+      new InternalIterable[U] {
+        protected val id = schedule(outer,(x : Iterable[T]) => x.flatMap(f))
+      }
+    }
+    override def filter(f : T=>Boolean) : DistributedIterable[T] = {
+      val outer = id;
+      new InternalIterable[T] {
+        protected val id = schedule(outer,(x : Iterable[T]) => x.filter(f))
+      }
+    }
+    override def reduce[B >: T](f : (B,B)=>B) : B = {
       val b = new scala.collection.mutable.ArrayBuffer[(Int,B)]
       gather[Iterable[T]](id,{ (x : Int, y :Iterable[T]) =>  b += ( x -> y.reduceLeft(f)) })
       b.toList.sort(_._1 < _._1).map( (x : (Int,B)) => x._2).reduceLeft(f);
+    }
+    override protected def finalize() {
+      try {
+        remove(id);
+      } finally {
+        super.finalize();
+      }
     }
   }
 }
