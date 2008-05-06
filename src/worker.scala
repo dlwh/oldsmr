@@ -10,25 +10,34 @@ import Priv._;
 class Worker extends Actor {
   import Worker._;
 
+
   def act() {
     val actual_worker = realWorker(Actor.self);
     val accumulators = mutable.Map[JobID,Actor]();
+    val self = Actor.self;
+    def getAcc(id : JobID) = accumulators.getOrElseUpdate(id,Worker.accumulator());
     loop {
       react {
-        case Do(id,s,f) => 
-        actual_worker ! Do(id,s,f);
+        case Do(in,f,out) => 
+         getAcc(in) ! Retr(in,{
+            x : (Int,Any) => 
+              getAcc(out) ! Add(x._1);
+              actual_worker ! { () =>self ! Done(out,x._1,f(x._2))};
+          });
         case Done(id,s,r)=> 
-        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Done(id,s,r);
+        getAcc(id) ! Done(id,s,r);
         case DoneAdding(id) => 
-        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! DoneAdding(id);
-        case Retrieve(id,f) => 
-        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Retrieve(id,f);
+        getAcc(id) ! DoneAdding(id);
+        case Retrieve(id,f,a) => 
+        getAcc(id) ! Retr(id,{
+            x : (Int,Any) => actual_worker ! { () => a ! ((x._1,f(x._2)))}; 
+          });
         case Reserve(id,shard) => 
-        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Add(shard);
+        getAcc(id) ! Add(shard);
         case Remove(id) => 
         val a = accumulators.get(id)
         accumulators -= id;
-        a.map(_.exit());
+        a.map(_.exit()); // remove it if it exists
       }
     }
   }
@@ -38,6 +47,8 @@ class Worker extends Actor {
 object Worker {
   // intra worker communication:
   private case class Add(shard : Int); 
+
+  private case class Retr(id: JobID, f : ((Int,Any))=>Unit); 
 
   def apply() = {
     val w = new Worker();
@@ -51,7 +62,7 @@ object Worker {
     var doneAdding = false;
     loop {
       react {
-        case Retrieve(id,f) => 
+        case Retr(id,f) => 
           val a =  actor {
             react {
               case DoneAdding(_) => 
@@ -66,7 +77,7 @@ object Worker {
             awaiting.foreach(_ ! DoneAdding(0));
           }
         case Add(s) => 
-          active += s //todo, signal if doneAdding was called.
+          if( !(done contains s)) active += s //todo, signal if doneAdding was called.
         case Done(x,s,r) => 
           active -= s; 
           done += (s->r);
@@ -79,8 +90,7 @@ object Worker {
   def realWorker(manager :Actor) = actor { 
       loop {
         react {
-          case  Do(id,s,f) => 
-          manager ! Done(id,s,f()) 
+          case f : (Unit=>Unit) => f();
         }
       }
     }
