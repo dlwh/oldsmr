@@ -40,7 +40,7 @@ private object Priv {
   private[smr] case class Remove[U](job : JobID) extends SchedMsg;
 
   private[smr] sealed case class WorkerMsg;
-  private[smr] case class Do(id : JobID, f : Unit=>Any, out : JobID) extends WorkerMsg;
+  private[smr] case class Do(id : JobID, f : Any=>Any, out : JobID) extends WorkerMsg;
   private[smr] case class Retrieve[T,U](id : JobID, f : Any=>Any, actor : Actor) extends WorkerMsg;
   private[smr] case class DoneAdding(id : JobID) extends WorkerMsg;
   private[smr] case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
@@ -69,6 +69,11 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
   // gets rid of it:
   def remove(job : JobID) : Unit = (scheduler ! Remove(job));
 
+  override def close = {
+    scheduler.exit();
+    workers.foreach(_.exit());
+  }
+
   private val scheduler = actor {
     // helper method to please the type system
     def handle_get[T,U](id : JobID, numShards : Int, f : T=>U, gather : (Int,U)=>Unit) {
@@ -78,7 +83,7 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
           val s = Actor.self
           workers.foreach{ _ ! Retrieve(id,f.asInstanceOf[Any=>Any],s)}
           for(val i <- 1 to numShards) receive {
-            case x : Tuple2[_,_] => gather(x._1.asInstanceOf[Int],x._2.asInstanceOf[U]) 
+            case x : Tuple2[_,_] =>  gather(x._1.asInstanceOf[Int],x._2.asInstanceOf[U]) 
           }
           reply{ None}
         }
@@ -126,6 +131,7 @@ class ActorDistributor(numWorkers : Int) extends Distributor {
       yield Worker();
   }
 }
+
 trait InternalIterable[T] extends DistributedIterable[T] {
   protected val id : JobID;
   protected val scheduler : Distributor;
@@ -135,30 +141,18 @@ trait InternalIterable[T] extends DistributedIterable[T] {
     val b = InternalIterable.handleGather[T,Iterable[T],Iterable[T]](this,identity[Iterable[T]]);
     b.toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
   }
+
   override def map[U](f : T=>U) : DistributedIterable[U] = {
-    val outer = id;
-    val s = scheduler;
-    new InternalIterable[U] {
-      protected val id = scheduler.schedule(outer,(x : Iterable[T]) => x.map(f))
-      protected val scheduler = s;
-    }
+    handleMap(this,f);
   }
   override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = {
-    val outer = id;
-    val s = scheduler;
-    new InternalIterable[U] {
-      protected val id = s.schedule(outer,(x : Iterable[T]) => x.flatMap(f))
-      protected val scheduler =s;
-    }
+    handleFlatMap(this,f);
   }
+
   override def filter(f : T=>Boolean) : DistributedIterable[T] = {
-    val outer = id;
-    val s = scheduler;
-    new InternalIterable[T] {
-      protected val id = s.schedule(outer,(x : Iterable[T]) => x.filter(f))
-      protected val scheduler =s;
-    }
+    handleFilter(this,f);
   }
+
   override def reduce[B >: T](f : (B,B)=>B) : B = {
     val b = handleGather[T,Iterable[T],B](this,(y :Iterable[T]) =>  y.reduceLeft(f) )
     b.toList.sort(_._1 < _._1).map( (x : (Int,B)) => x._2).reduceLeft(f);
@@ -174,16 +168,35 @@ trait InternalIterable[T] extends DistributedIterable[T] {
 
 object InternalIterable {
   private def handleGather[T,C,U](self : InternalIterable[T], f : C=>U) = {
-    val b = new ArrayBuffer[(Int,U)];
-    val recv = actor { loop {
-      react{
-        case x : (Int,U) => b += x;
+    val recv = actor { 
+      val b = new ArrayBuffer[(Int,U)];
+      loop {
+        react{
+          case x : (Int,U) => b += x;
+          case None => reply { b}
+        }
       }
     }
-    }
     self.scheduler.gather(self.id,f, { (x :Int, y : U) => recv ! (x,y) });
-    b
+    (recv !? None).asInstanceOf[ArrayBuffer[(Int,U)]];
   }
 
-  private def identity[T] = (x : T)  => x;
+  private def handleMap[T,U](self : InternalIterable[T], f : T=>U) = {
+    new InternalIterable[U] {
+      protected val scheduler = self.scheduler;
+      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.map(f))
+    }
+  }
+  private def handleFlatMap[T,U](self : InternalIterable[T], f : T=>Iterable[U]) = {
+    new InternalIterable[U] {
+      protected val scheduler = self.scheduler;
+      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.flatMap(f))
+    }
+  }
+  private def handleFilter[T](self : InternalIterable[T], f : T=>Boolean) = {
+    new InternalIterable[T] {
+      protected val scheduler = self.scheduler;
+      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.filter(f))
+    }
+  }
 }
