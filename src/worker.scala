@@ -1,15 +1,18 @@
 package edu.stanford.nlp.smr;
 import scala.actors.Actor;
 import scala.actors.Actor._;
+import scala.actors.Exit;
 import scala.collection.mutable.ArrayBuffer;
 import scala.collection._;
+import edu.stanford.nlp.smr.TransActor._;
+import scala.actors.remote.RemoteActor._;
+import scala.actors.remote.Node;
 
 import Public._;
 import Priv._;
 
 class Worker extends Actor {
   import Worker._;
-
 
   def act() {
     trapExit = true;
@@ -18,6 +21,10 @@ class Worker extends Actor {
     def getAcc(id : JobID) = accumulators.getOrElseUpdate(id,Worker.accumulator(id));
     loop {
       react {
+        case Enliven(port,sym)=>
+          alive(port);
+          register(sym,Actor.self);
+          reply{None}
         case Do(in,f,out) => 
          getAcc(in) ! Forward(getAcc(out));
          val outA = getAcc(out);
@@ -31,38 +38,49 @@ class Worker extends Actor {
         case DoneAdding(id) => 
         //println("external " + id);
         getAcc(id) ! DoneAdding(id);
-        case Retrieve(id,f,a) => 
+        case Retrieve(id,f,out,a) => 
+        val a2 = SerializedActorToActor(a);
         getAcc(id) ! Retr(id,{
-            x : (Int,Any) =>actual_worker ! { () => a ! ((x._1,f(x._2)))}; 
+            x : (Int,Any) =>actual_worker ! { () => a2 ! Retrieved(out,x._1,f(x._2)); }; 
           });
         case Reserve(id,shard) => 
         getAcc(id) ! Add(shard);
-        case scala.actors.Exit(_,_) => 
-          println("woo!");
-          actual_worker.exit();
-          accumulators.values.map(_.exit());
+        case Exit(a,r) => 
+          actual_worker ! Exit(a,r);
+          accumulators.values.map(_ ! Exit(a,r));
+          exit();
         case Remove(id) => 
         val a = accumulators.get(id)
-        accumulators -= id;
-        a.map(_.exit()); // remove it if it exists
+          accumulators -= id;
+        a.map( _ ! Exit(self,'remove));
       }
     }
   }
 
+  // private stuff:
+  classLoader = this.getClass.getClassLoader;
 }
 
 object Worker {
   // intra worker communication:
   private case class Add(shard : Int); 
   private case class Forward(out : Actor); 
+  private case class Enliven(port : Int,sym : Symbol);
 
   private case class Retr(id: JobID, f : ((Int,Any))=>Unit); 
 
-  def apply() = {
+  def apply()  : Worker = {
     val w = new Worker();
     w.start();
     w;
   }
+
+  def apply(port : Int, sym : Symbol) : Worker = {
+    val w = apply();
+    w ! Enliven(port,sym);
+    w
+  }
+
   private def accumulator(id : JobID) = actor {
     val active = mutable.Set[Int]();
     val done = mutable.Map[Int,Any]();
@@ -70,6 +88,7 @@ object Worker {
     var doneAdding = false;
     loop {
       react {
+        case Exit(a,f) => exit();
         case Forward(out) =>
           //println("forward" + id + " to " + out);
           if(doneAdding) {
@@ -127,6 +146,7 @@ object Worker {
       loop {
         react {
           case f : (()=>Any) => f();
+          case Exit(_,_) => exit();
           case x => println("got something else" + x);
         }
       }
