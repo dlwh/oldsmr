@@ -1,4 +1,4 @@
-<project name="smud" default="compile" basedir=".">
+<project name="smr" default="compile" basedir=".">
   <property name="src.dir" value="src/"/>
   <property name="build.dir" value="classes"/>
 
