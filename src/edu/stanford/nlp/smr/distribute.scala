@@ -31,7 +31,6 @@ trait Distributor {
 
 sealed case class NumShards(n : Int);
 
-
 private object Priv {
 
   // Messages to the scheduler from the disributor
@@ -48,6 +47,7 @@ private object Priv {
   case class DoneAdding(id : JobID) extends WorkerMsg;
   case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
   case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
+  case object Close extends WorkerMsg;
 
   case class StartGet(out: JobID, numShards : Int, gather : Actor);
   case class Retrieved(out : JobID, shard : Int, result : Any);
@@ -79,7 +79,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
 
   override def close = {
     scheduler ! Exit(self,'close);
-    workers.foreach(_ ! Exit(self,'close));
+    workers.foreach(_ ! Close);
   }
   // private stuff:
   classLoader = this.getClass.getClassLoader;
@@ -105,6 +105,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
     }
   }
 
+  // central dispatcher for ActorDistributor
   private val scheduler = actor {
     val numShards = mutable.Map[JobID,Int]();
     var nextJob : JobID =0
@@ -165,25 +166,13 @@ trait InternalIterable[T] extends DistributedIterable[T] {
   import InternalIterable._;
 
   def elements = {
-    val b = InternalIterable.handleGather[T,Iterable[T],Iterable[T]](this,identity[Iterable[T]]);
-    b.toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
+    handleGather[T,Iterable[T],Iterable[T]](this,identity[Iterable[T]]).toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
   }
 
-  override def map[U](f : T=>U) : DistributedIterable[U] = {
-    handleMap(this,f);
-  }
-  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = {
-    handleFlatMap(this,f);
-  }
-
-  override def filter(f : T=>Boolean) : DistributedIterable[T] = {
-    handleFilter(this,f);
-  }
-
-  override def reduce[B >: T](f : (B,B)=>B) : B = {
-    val b = handleGather[T,Iterable[T],B](this,(y :Iterable[T]) =>  y.reduceLeft(f) )
-    b.toList.sort(_._1 < _._1).map( (x : (Int,B)) => x._2).reduceLeft(f);
-  }
+  override def map[U](f : T=>U) : DistributedIterable[U] = handleMap(this,f);
+  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = handleFlatMap(this,f);
+  override def filter(f : T=>Boolean) : DistributedIterable[T] = handleFilter(this,f);
+  override def reduce[B >: T](f : (B,B)=>B) : B = handleReduce(this,f)
 
   override protected def finalize() {
     try {
@@ -216,19 +205,24 @@ object InternalIterable {
   private def handleMap[T,U](self : InternalIterable[T], f : T=>U) = {
     new InternalIterable[U] {
       protected val scheduler = self.scheduler;
-      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.map(f))
+      protected val id = scheduler.schedule(self.id,Util.fMap(f));
     }
   }
   private def handleFlatMap[T,U](self : InternalIterable[T], f : T=>Iterable[U]) = {
     new InternalIterable[U] {
       protected val scheduler = self.scheduler;
-      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.flatMap(f))
+      protected val id = scheduler.schedule(self.id,Util.fFlatMap(f));
     }
   }
   private def handleFilter[T](self : InternalIterable[T], f : T=>Boolean) = {
     new InternalIterable[T] {
       protected val scheduler = self.scheduler;
-      protected val id = scheduler.schedule(self.id,(x : Iterable[T]) => x.filter(f))
+      protected val id = scheduler.schedule(self.id,Util.fFilter(f));
     }
+  }
+
+  private def handleReduce[T,B>:T](self : InternalIterable[T], f : (B,B)=>B) =  {
+    val b = handleGather[T,Iterable[T],Option[B]](self,(x : Iterable[B])=> if (x.isEmpty) None else Some(x.reduceLeft(f)))
+    b.filter(None!=).map( (x : (Int,Option[B])) => x._2.get).reduceLeft(f);
   }
 }

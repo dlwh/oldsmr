@@ -45,9 +45,9 @@ class Worker extends Actor {
           });
         case Reserve(id,shard) => 
         getAcc(id) ! Add(shard);
-        case Exit(a,r) => 
-          actual_worker ! Exit(a,r);
-          accumulators.values.map(_ ! Exit(a,r));
+        case Close=>
+          actual_worker ! Exit(self,'close);
+          accumulators.values.map(_ ! Exit(self,'close));
           exit();
         case Remove(id) => 
         val a = accumulators.get(id)
