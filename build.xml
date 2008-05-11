@@ -31,8 +31,8 @@
   <target name="compile">
     <mkdir dir="${build.dir}"/>
 
-    <fsc srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
+    <scalac srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
       <include name="**/*.scala"/>
-    </fsc>
+    </scalac>
   </target>
 </project>
