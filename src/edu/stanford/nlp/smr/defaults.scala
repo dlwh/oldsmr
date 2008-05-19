@@ -1,13 +1,31 @@
 package edu.stanford.nlp.smr;
 import scala.collection.mutable.ArrayBuffer;
+
+/**
+ * Used as an implicit for the defaults object. Designed to minimize implicit-space conflicts.
+ */
+sealed case class NumShards(n : Int);
+
+/**
+ * Object to hold various sensible defaults for SMR. Expected use:
+ * <pre>
+ * import edu.stanford.nlp.smr.defaults._;
+ * </pre>
+ * 
+ * @author dlwh
+ */
 object defaults {
+
+  /**
+   * Suppose we only want 5 shards by default.
+   */
   implicit val defaultNumShards = NumShards(5);
 
   /**
    * Implicit shard function that provides a reasonable default in most cases. Special treatment for
    * Ranges and for Collections
    */
-  implicit def  shard[T] (it : Iterable[T])(implicit numShards : NumShards) : List[Iterable[T]] = it match {
+  implicit def shard[T] (it : Iterable[T])(implicit numShards : NumShards) : List[Iterable[T]] = it match {
     case x : scala.Range.Inclusive => shardIRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
     case x : scala.Range=> shardRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
     case x : Collection[_] => 
@@ -28,14 +46,14 @@ object defaults {
     arrs.toList
   }
 
-   
-  implicit def shardRange (r : scala.Range)(implicit numShards : NumShards) : List[Iterable[Int]]=  {
+  private def shardRange (r : scala.Range)(implicit numShards : NumShards) : List[Iterable[Int]]=  {
     val arrs = new ArrayBuffer[Range]
     val n = numShards.n;
     arrs ++= (for(val i<- 0 until n) yield new Range(r.start + i * r.step,r.end,n * r.step));
     arrs.toList
   }
-  implicit def shardIRange (r : scala.Range.Inclusive)(implicit numShards : NumShards) : List[Iterable[Int]]= {
+
+  private def shardIRange (r : scala.Range.Inclusive)(implicit numShards : NumShards) : List[Iterable[Int]]= {
     val arrs = new ArrayBuffer[Range.Inclusive]
     val n = numShards.n;
     arrs ++= (for(val i<- 0 until n) yield new Range.Inclusive(r.start + i * r.step ,r.end,n * r.step));
@@ -49,7 +67,7 @@ object defaults {
  * original author: @author  Stephane Micheloud
  */
 @serializable
-class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
+private[defaults] class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
   if (step == 0) throw new Predef.IllegalArgumentException
 
   /** Create a new range with the start and end values of this range and
@@ -88,9 +106,9 @@ class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq
   def inclusive = new Range.Inclusive(start,end,step)
 }
 
-object Range {
+private[defaults] object Range {
   @serializable
-  class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
+  private[defaults] class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
     override def apply(idx: Int): Int = super.apply(idx)
     override protected def last(base: Int, step: Int): Int = 1
     override def by(step: Int): Range = new Inclusive(start, end, step)

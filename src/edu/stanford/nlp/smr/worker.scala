@@ -145,7 +145,7 @@ object Worker {
   def realWorker(manager :Actor) = actor { 
       loop {
         react {
-          case f : Function[Unit,Any] => f();
+          case f : Function[_,_] => f.asInstanceOf[Unit=>Any]();
           case Exit(_,_) => exit();
           case x => println("got something else" + x);
         }

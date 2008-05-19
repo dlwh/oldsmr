@@ -32,7 +32,7 @@
   <target name="compile">
     <mkdir dir="${build.dir}"/>
 
-    <scalac srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
+    <scalac deprecation="yes" unchecked="yes" srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
       <include name="**/*.scala"/>
     </scalac>
   </target>

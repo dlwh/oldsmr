@@ -60,8 +60,6 @@ trait Distributor {
   def close() {}
 }
 
-sealed case class NumShards(n : Int);
-
 private object Priv {
 
   // Messages to the scheduler from the disributor
@@ -97,6 +95,13 @@ trait DistributedIterable[+T] extends Iterable[T] {
   def reduce[B >: T](f : (B,B)=>B) : B;
 }
 
+/**
+ * Class most users will use. Example use:
+ * <pre>
+ * val dist = new ActorDistributor(4,4000);
+ * dist.distribute(myIterable).map(f).reduce(g);
+ * </pre>
+ */
 class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   override def distribute[T] (it : Iterable[T])
     (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
@@ -113,6 +118,9 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   // gets rid of it:
   def remove(job : JobID) : Unit = (scheduler ! Remove(job));
 
+  /**
+   * Adds a (possibly remote) Worker to the workers list. 
+   */
   def addWorker(w : Actor) : Unit = (scheduler ! AddWorker(w));
 
   override def close = {
@@ -198,7 +206,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
     workers += Worker();
 }
 
-trait InternalIterable[T] extends DistributedIterable[T] {
+private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
   protected val id : JobID;
   protected val scheduler : Distributor;
   import InternalIterable._;
@@ -226,7 +234,7 @@ trait InternalIterable[T] extends DistributedIterable[T] {
  * This object wouldn't exist, except that scala closures pass in the this pointer
  * even if you don't use any state. Objects don't have that restriction.
  */
-object InternalIterable {
+private[smr] object InternalIterable {
   private def handleGather[T,C,U](self : InternalIterable[T], f : C=>U) = {
     val recv = actor { 
       val b = new ArrayBuffer[(Int,U)];
