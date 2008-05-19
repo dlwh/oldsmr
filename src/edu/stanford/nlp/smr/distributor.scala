@@ -8,24 +8,55 @@ import scala.actors.remote.RemoteActor._;
 import scala.actors.remote._;
 import edu.stanford.nlp.smr.TransActor._;
 
-object Public {
+object Distributor {
 // Every job needs an id:
 type JobID = Int;
 }
-import Public._;
+import Distributor._;
 
+/**
+ * Trait for defining objects that can automatically distribute tasks to perform on iterables.
+ * @author dlwh
+ */
 trait Distributor {
+  /**
+  * Generates a DistributedIterable based on the sharding function. Shards from the list are 
+  * automatically divvied out to the workers.
+  */
   def distribute[T] (it : Iterable[T])(implicit shard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T];
 
-  // pushes data onto the grid
-  def shard[T](it : Iterable[T])(implicit myShard : Iterable[T]=>List[Iterable[T]]) : JobID;
-  // runs a task on some data on the grid
+  /**
+   * Low level operation: should generally not be used, but made public for completeness. 
+   * Given a U, automatically shard it out using the shard function to workers.
+   * @return a handle to the shards
+   */
+  def shard[U,V](it : U)(implicit myShard : U=>List[V]) : JobID;
+
+  /**
+   * Low level operation: should generally not be used, but made public for completeness. 
+   * Convert all sharded elements to U's. More or less a map operation.
+   * @return a handle to the changed shards.
+   */
   def schedule[T,U](id : JobID, f: T=>U) : JobID;
-  // gets it back using some function
+
+  /**
+   * Low level operation: should generally not be used, but made public for completeness. 
+   * Retreive all shards, first applying f to each one. Sent as Some(t) to the Actor.
+   * When finished, None is sent.
+   * @return a handle to the changed shards.
+   */
   def gather[T,U](job : JobID, f: T=>U, gather : Actor) :Unit;
-  // gets rid of it:
+
+  /**
+   * Low level operation: should generally not be used, but made public for completeness. 
+   * Delete all shards with this id.
+   * @return a handle to the changed shards.
+   */
   def remove(job : JobID) : Unit;
 
+  /**
+   * Close the distributor and all workers.
+   */
   def close() {}
 }
 
@@ -35,7 +66,7 @@ private object Priv {
 
   // Messages to the scheduler from the disributor
   sealed case class SchedMsg;
-  case class Shard[T](it : Iterable[T], shard : Iterable[T]=>List[Iterable[T]]) extends SchedMsg;
+  case class Shard[U,V](it : U, shard : U=>List[V]) extends SchedMsg;
   case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
   case class Get[T,U](job : JobID, f : T => U, gather : Actor) extends SchedMsg;
   case class Remove[U](job : JobID) extends SchedMsg;
@@ -56,18 +87,25 @@ import Priv._;
 
 trait DistributedIterable[+T] extends Iterable[T] {
   override def map[B](f : T=>B) : DistributedIterable[B] = null;
+  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = null;
+  override def filter(f : T=>Boolean) : DistributedIterable[T] = null;
+  /**
+   * Sadly, both versions of reduce in the Scala libs are not fully associative,
+   * which is required for a parallel reduce. This version of reduce demands 
+   * that the operators are associative.
+   */
   def reduce[B >: T](f : (B,B)=>B) : B;
 }
 
 class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   override def distribute[T] (it : Iterable[T])
-      (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
+    (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
         protected lazy val id : JobID = shard(it)(myShard);
         protected lazy val scheduler = ActorDistributor.this;
       };
 
   // pushes data onto the grid
-  def shard[T](it : Iterable[T])(implicit myShard : Iterable[T]=>List[Iterable[T]]) = (scheduler !?Shard(it,myShard)).asInstanceOf[JobID];
+  def shard[U,V](it : U)(implicit myShard : U=>List[V]) = (scheduler !?Shard(it,myShard)).asInstanceOf[JobID];
   // runs a task on some data on the grid
   def schedule[T,U](id : JobID, f: T=>U) = (scheduler !? Sched(id,f.asInstanceOf[Any=>Any])).asInstanceOf[JobID];
   // gets it back using some function. Returns immediately. expect output from gather
@@ -166,7 +204,7 @@ trait InternalIterable[T] extends DistributedIterable[T] {
   import InternalIterable._;
 
   def elements = {
-    handleGather[T,Iterable[T],Iterable[T]](this,identity[Iterable[T]]).toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
+    handleGather(this,identity[Iterable[T]]).toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
   }
 
   override def map[U](f : T=>U) : DistributedIterable[U] = handleMap(this,f);
@@ -183,6 +221,11 @@ trait InternalIterable[T] extends DistributedIterable[T] {
   }
 }
 
+
+/**
+ * This object wouldn't exist, except that scala closures pass in the this pointer
+ * even if you don't use any state. Objects don't have that restriction.
+ */
 object InternalIterable {
   private def handleGather[T,C,U](self : InternalIterable[T], f : C=>U) = {
     val recv = actor { 
