@@ -10,7 +10,7 @@ object defaults {
   implicit def  shard[T] (it : Iterable[T])(implicit numShards : NumShards) : List[Iterable[T]] = it match {
     case x : scala.Range.Inclusive => shardIRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
     case x : scala.Range=> shardRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
-    case x : Collection[T] => 
+    case x : Collection[_] => 
     if(x.size < numShards.n) {
      List(x) 
     } else {

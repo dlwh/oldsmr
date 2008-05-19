@@ -1,6 +1,7 @@
 <project name="smr" default="compile" basedir=".">
   <property name="src.dir" value="src/"/>
   <property name="build.dir" value="classes"/>
+  <property name="docs.dir" value="docs"/>
 
   <property name="repository.home" value="/opt/local/share/"/>
   <property name="scala-compiler.jar" value="${repository.home}/scala/lib/scala-compiler.jar"/>
@@ -35,4 +36,17 @@
       <include name="**/*.scala"/>
     </scalac>
   </target>
+  <target name="docs">
+    <mkdir dir="${docs.dir}"/>
+    <scaladoc
+      srcdir="${src.dir}"
+      destdir="${docs.dir}"
+      deprecation="yes" unchecked="yes"
+      windowtitle="Scala MapReduce Documentation"
+      doctitle="&lt;div&gt;Scala MapReduce 0.0.2&lt;/div&gt;"
+      classpathref="scala.classpath">
+      <include  name="**/*.scala"/>
+    </scaladoc>
+  </target>
+
 </project>

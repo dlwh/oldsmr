@@ -8,7 +8,7 @@ import edu.stanford.nlp.smr.TransActor._;
 import scala.actors.remote.RemoteActor._;
 import scala.actors.remote.Node;
 
-import Public._;
+import Distributor._;
 import Priv._;
 
 class Worker extends Actor {
@@ -145,7 +145,7 @@ object Worker {
   def realWorker(manager :Actor) = actor { 
       loop {
         react {
-          case f : (()=>Any) => f();
+          case f : Function[Unit,Any] => f();
           case Exit(_,_) => exit();
           case x => println("got something else" + x);
         }
