@@ -68,6 +68,12 @@ object defaults {
     while(elems.hasNext) { arrs(i%numShards.n) += elems.next; i += 1}
     arrs.toList
   }
+  implicit def fakeDistributedIterable[T](it : Iterable[T]):DistributedIterable[T] = new DistributedIterable[T] {
+    override def map[U](f : T=>U)  = fakeDistributedIterable(it.map(f));
+    override def flatMap[U](f : T=>Iterable[U]) = fakeDistributedIterable(it.flatMap(f));
+    override def reduce[U>:T](f : (U,U)=>U)  = it.reduceLeft(f);
+    def elements = it.elements;
+  }
 
   private def shardRange (r : scala.Range)(implicit numShards : NumShards) : List[Iterable[Int]]=  {
     val arrs = new ArrayBuffer[Range]
