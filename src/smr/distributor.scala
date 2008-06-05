@@ -297,6 +297,6 @@ private[smr] object InternalIterable {
 
   private def handleReduce[T,B>:T](self : InternalIterable[T], f : (B,B)=>B) =  {
     val b = handleGather[T,Iterable[T],Option[B]](self,(x : Iterable[B])=> if (x.isEmpty) None else Some(x.reduceLeft(f)))
-    b.filter(None!=).map( (x : (Int,Option[B])) => x._2.get).reduceLeft(f);
+    b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(f);
   }
 }
