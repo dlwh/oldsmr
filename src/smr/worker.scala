@@ -168,9 +168,9 @@ object Worker {
   def realWorker(manager :Actor) = actor { 
       loop {
         react {
-          case f : Function[_,_] => f.asInstanceOf[Unit=>Any]();
           case Exit(_,_) => exit();
-          case x => println("got something else" + x);
+          case f : Function0[_] => f();
+          case x : AnyRef => println(x.getClass.getName());
         }
       }
     }

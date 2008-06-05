@@ -1,5 +1,5 @@
-import edu.stanford.nlp.smr._
-import edu.stanford.nlp.smr.defaults._
+import smr._
+import smr.defaults._
 import scala.actors.remote.Node;
 import scala.actors.remote.RemoteActor._;
 
