@@ -60,7 +60,7 @@ object TransActor {
     * Converts the serialized version of remote actors into a proxy. Note that this is not a
     * TransActor, so it cannot be sent down the wire.
     */
-  implicit def SerializedActorToActor(a :SerializedActor) : Actor  = select(a.node,a.sym);
+  implicit def SerializedActorToActor(a :SerializedActor) : OutputChannel[Any]  = select(a.node,a.sym);
 
 }
 

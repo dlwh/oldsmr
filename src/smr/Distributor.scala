@@ -23,6 +23,7 @@
 */
 package smr;
 import scala.actors.Actor;
+import scala.actors.OutputChannel;
 import scala.actors.Exit;
 import scala.actors.Actor._;
 import scala.collection.mutable.ArrayBuffer;
@@ -91,7 +92,7 @@ private object Priv {
   case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
   case class Get[T,U](job : JobID, f : T => U, gather : Actor) extends SchedMsg;
   case class Remove[U](job : JobID) extends SchedMsg;
-  case class AddWorker[U](a : Actor) extends SchedMsg;
+  case class AddWorker[U](a :OutputChannel[Any]) extends SchedMsg;
 
   sealed case class WorkerMsg;
   case class Do(id : JobID, f : Any=>Any, out : JobID) extends WorkerMsg;
@@ -106,6 +107,10 @@ private object Priv {
 }
 import Priv._;
 
+object Debug extends scala.actors.Debug("smr:: ") {
+  level = 4;
+}
+
 trait DistributedIterable[+T] extends Iterable[T] {
   override def map[B](f : T=>B) : DistributedIterable[B] = null;
   override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = null;
@@ -116,7 +121,37 @@ trait DistributedIterable[+T] extends Iterable[T] {
    * that the operators are associative.
    */
   def reduce[B >: T](f : (B,B)=>B) : B;
+
+  /**
+   * Can do a map and a reduce in a single step. Useful for large data sets.
+   */
+  def mapReduce[U,R>:U](m : T=>U)(r : (R,R)=>R) : R = this.map(m).reduce(r);
+
+  /**
+   * Returns a "lazy" DistributedIterable that does not invoke the supplied 
+   * operation until another non-lazy operation is applied.
+   * Because this whole library is designed for large memory tasks,
+   * using a lazyMap is occasionally useful.
+   * 
+   * A lazyMap followed by a reduce is the same as a mapReduce.
+   *
+   */
+  def lazyMap[U](f : T=>U) :DistributedIterable[U] ={
+    val parent = this;
+    new DistributedIterable[U] {
+      def elements = parent.elements.map(f);
+      override def map[C](g : U=>C) = parent.map(f andThen g);
+      override def flatMap[C](g: U=>Iterable[C]) = parent.flatMap(f andThen g);
+      override def filter(g: U=>Boolean) = parent.map(f).filter(g);
+      override def reduce[C >:U](g : (C,C) =>C) : C= parent.mapReduce[U,C](f)(g)
+      override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](f andThen m)(r);
+      override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(f andThen g);
+    }
+  }
+
+
 }
+
 
 /**
  * Class most users will use. Example use:
@@ -144,7 +179,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   /**
    * Adds a (possibly remote) Worker to the workers list. 
    */
-  def addWorker(w : Actor) : Unit = (scheduler ! AddWorker(w));
+  def addWorker(w :OutputChannel[Any]) : Unit = (scheduler ! AddWorker(w));
 
   override def close = {
     scheduler ! Exit(self,'close);
@@ -188,43 +223,39 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
         case scala.actors.Exit(_,_) => exit();
         case Shard(it,shard)=> 
           val job = getNextJob();
-          actor { 
-            react {
-              case _ =>
-              val shards = shard(it)
-              numShards += (job -> shards.length);
-              shards.zipWithIndex.foreach {
-                x => workers(x._2 % workers.length) ! Done(job,x._2,x._1)
-              }
-              workers.foreach { _ ! DoneAdding(job) }
-              reply { job }
-            }
-          }.forward(None)
+          val shards = shard(it)
+          numShards += (job -> shards.length);
+          shards.zipWithIndex.foreach {
+            x => 
+            Debug.info( "sending shard " + x._2 + " to Worker " + x._2 %workers.length);
+            workers(x._2 % workers.length) ! Done(job,x._2,x._1)
+          }
+          workers.foreach { _ ! DoneAdding(job) }
+          reply { job }
         case Sched(in,f)=> 
           val job = getNextJob();
-          actor { 
-            react {
-              case _ =>
-              val oldNumShards = numShards.get(in).get;
-              numShards += (job -> oldNumShards);
-              workers.foreach { a =>  
-                a ! Do(in, f, job)
-              }
-              reply { job }
-            }
-          }.forward(None)
+          val oldNumShards = numShards.get(in).get;
+          numShards += (job -> oldNumShards);
+          Debug.info( "Running " + f.getClass.getName() + " on job " + in + "'s output as job " + job);
+          workers.foreach { a =>  
+            a ! Do(in, f, job)
+          }
+          reply { job }
         case Get(in,f,gatherer)=>
           val out = getNextJob();
+          Debug.info( "Getting job "  + in  + "with function " + f.getClass.getName() + " as job id " + out);
           accumulator !? StartGet(out,numShards(in),gatherer);
           workers.foreach{ _ ! Retrieve(in,f.asInstanceOf[Any=>Any],out,accumulator)}
-        case AddWorker(a)=> workers += a; 
+        case AddWorker(a)=> 
+          Debug.info("Added a worker.");
+          workers += a; 
         
-        case Remove(id) => workers.foreach{ _ ! Remove(id)}
+        case Remove(id) => Debug.info("Master removing job " + id); workers.foreach{ _ ! Remove(id)}
       }
     }
   }
 
-  private val workers =  new ArrayBuffer[Actor];
+  private val workers =  new ArrayBuffer[OutputChannel[Any]];
   for (val i <- List.range(0,numWorkers))
     workers += Worker();
 }
@@ -242,6 +273,7 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
   override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = handleFlatMap(this,f);
   override def filter(f : T=>Boolean) : DistributedIterable[T] = handleFilter(this,f);
   override def reduce[B >: T](f : (B,B)=>B) : B = handleReduce(this,f)
+  override def mapReduce[U,B >: U](m : T=>U)(r : (B,B)=>B) : B = handleMapReduce(this,m,r);
 
   override protected def finalize() {
     try {
@@ -279,6 +311,7 @@ private[smr] object InternalIterable {
   private def handleMap[T,U](self : InternalIterable[T], f : T=>U) = {
     new InternalIterable[U] {
       protected val scheduler = self.scheduler;
+      Debug.info("Map with " + f.getClass.getName);
       protected val id = scheduler.schedule(self.id,Util.fMap(f));
     }
   }
@@ -298,5 +331,20 @@ private[smr] object InternalIterable {
   private def handleReduce[T,B>:T](self : InternalIterable[T], f : (B,B)=>B) =  {
     val b = handleGather[T,Iterable[T],Option[B]](self,(x : Iterable[B])=> if (x.isEmpty) None else Some(x.reduceLeft(f)))
     b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(f);
+  }
+
+  private def handleMapReduce[T,U,B>:U](self :InternalIterable[T], m : T=>U, r : (B,B)=>B) = {
+    Debug.info("MapReduce with " + m.getClass.getName + " and reduce " + r.getClass.getName);
+    def doMapReduce(x : Iterable[T]) = {
+      if (x.isEmpty) None 
+      else {
+        var elems = x.elements;
+        var acc : B = m(elems.next);;
+        while(elems.hasNext) acc= r(acc,m(elems.next));
+        Some(acc);
+      }
+    }
+    val b = handleGather[T,Iterable[T],Option[B]](self,doMapReduce);
+    b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(r);
   }
 }

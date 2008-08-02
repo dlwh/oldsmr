@@ -25,24 +25,24 @@ package smr;
 import scala.collection.mutable.ArrayBuffer;
 
 /**
- * Used as an implicit for the Defaults object. Designed to minimize implicit-space conflicts.
+ * Used as an implicit for the defaults object. Designed to minimize implicit-space conflicts.
  */
 sealed case class NumShards(n : Int);
 
 /**
- * Object to hold various sensible Defaults for SMR. Expected use:
+ * Object to hold various sensible defaults for SMR. Expected use:
  * <pre>
- * import edu.stanford.nlp.smr.Defaults._;
+ * import smr.defaults._;
  * </pre>
  * 
  * @author dlwh
  */
-object Defaults {
+object defaults {
 
   /**
    * Suppose we only want 5 shards by default.
    */
-  implicit val defaultNumShards = NumShards(5);
+  implicit val defaultNumShards = NumShards(4);
 
   /**
    * Implicit shard function that provides a reasonable default in most cases. Special treatment for
@@ -96,7 +96,7 @@ object Defaults {
  * original author: @author  Stephane Micheloud
  */
 @serializable
-private[Defaults] class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
+private[defaults] class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
   if (step == 0) throw new Predef.IllegalArgumentException
 
   /** Create a new range with the start and end values of this range and
@@ -135,9 +135,9 @@ private[Defaults] class Range(val start: Int, val end: Int, val step: Int) exten
   def inclusive = new Range.Inclusive(start,end,step)
 }
 
-private[Defaults] object Range {
+private[defaults] object Range {
   @serializable
-  private[Defaults] class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
+  private[defaults] class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
     override def apply(idx: Int): Int = super.apply(idx)
     override protected def last(base: Int, step: Int): Int = 1
     override def by(step: Int): Range = new Inclusive(start, end, step)

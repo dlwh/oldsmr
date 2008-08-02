@@ -41,7 +41,9 @@ class Worker extends Actor {
     trapExit = true;
     val actual_worker = realWorker(Actor.self);
     val accumulators = mutable.Map[JobID,Actor]();
-    def getAcc(id : JobID) = accumulators.getOrElseUpdate(id,Worker.accumulator(id));
+    def getAcc(id : JobID) ={ 
+      accumulators.getOrElseUpdate(id,Worker.accumulator(id));
+    }
     loop {
       react {
         case Enliven(port,sym)=>
@@ -57,25 +59,30 @@ class Worker extends Actor {
               outA ! Done(out,x._1,f(x._2))};
           });
         case Done(id,s,r)=> 
-        getAcc(id) ! Done(id,s,r);
+          getAcc(id) ! Done(id,s,r);
+          Debug.info( "Worker storing job " + id + " shard " + s);
         case DoneAdding(id) => 
         //println("external " + id);
-        getAcc(id) ! DoneAdding(id);
+        getAcc(id) !? DoneAdding(id);
         case Retrieve(id,f,out,a) => 
         val a2 = SerializedActorToActor(a);
         getAcc(id) ! Retr(id,{
             x : (Int,Any) =>actual_worker ! { () => a2 ! Retrieved(out,x._1,f(x._2)); }; 
           });
         case Reserve(id,shard) => 
-        getAcc(id) ! Add(shard);
+        getAcc(id) !? Add(shard);
         case Close=>
+          Debug.info("Worker " + self + " shutting down");
           actual_worker ! Exit(self,'close);
           accumulators.values.map(_ ! Exit(self,'close));
           exit();
         case Remove(id) => 
         val a = accumulators.get(id)
           accumulators -= id;
-        a.map( _ ! Exit(self,'remove));
+          Debug.info("Worker " + self + " Removing job " + id);
+          a.map( _ ! Exit(self,'remove));
+        case x =>
+          Debug.error( "Wrong input to worker!" + x);
       }
     }
   }
@@ -111,7 +118,7 @@ object Worker {
     var doneAdding = false;
     loop {
       react {
-        case Exit(a,f) => exit();
+        case Exit(a,f) => done.clear(); exit();
         case Forward(out) =>
           //println("forward" + id + " to " + out);
           if(doneAdding) {
@@ -162,6 +169,8 @@ object Worker {
           if(doneAdding && active.size == 0) {
             awaiting.foreach(_ ! DoneAdding(0));
           }
+        case x =>
+          Debug.error( "Wrong input to worker!" + x);
       }
     }
   }
@@ -169,8 +178,8 @@ object Worker {
       loop {
         react {
           case Exit(_,_) => exit();
-          case f : Function0[_] => f();
-          case x : AnyRef => println(x.getClass.getName());
+          case f : Function0[_] => try {  f(); } catch { case x => x.printStackTrace();}
+          case x => Debug.error( "Wrong input to realWorker!" + x);
         }
       }
     }
