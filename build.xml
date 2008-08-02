@@ -32,8 +32,7 @@
       destdir="${docs.dir}"
       deprecation="yes" unchecked="yes"
       windowtitle="Scala MapReduce Documentation"
-      doctitle="&lt;div&gt;Scala MapReduce 0.0.3&lt;/div&gt;"
-      classpathref="scala.classpath">
+      doctitle="&lt;div&gt;Scala MapReduce 0.0.3&lt;/div&gt;" >
       <include  name="**/*.scala"/>
     </scaladoc>
   </target>
