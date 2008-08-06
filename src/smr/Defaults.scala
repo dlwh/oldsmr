@@ -57,7 +57,7 @@ object defaults {
     } else {
       val sz = x.size / numShards.n;
       val arrs = new ArrayBuffer[Iterable[T]]
-      arrs ++= (for(val i <- 0 until numShards.n ) yield x.drop(sz * i).take(sz).toList);
+      arrs ++= (for(val i <- 0 until numShards.n ) yield x.elements.drop(sz * i).take(sz).toList);
       arrs.toList
     }
     case _ =>
