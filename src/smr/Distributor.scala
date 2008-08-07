@@ -47,14 +47,14 @@ trait Distributor {
   * Generates a DistributedIterable based on the sharding function. Shards from the list are 
   * automatically divvied out to the workers.
   */
-  def distribute[T] (it : Iterable[T])(implicit shard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T];
+  def distribute[T] (it : Iterable[T])(implicit shard : (Iterable[T],Int)=>List[Iterable[T]]) : DistributedIterable[T];
 
   /**
    * Low level operation: should generally not be used, but made public for completeness. 
    * Given a U, automatically shard it out using the shard function to workers.
    * @return a handle to the shards
    */
-  def shard[U,V](it : U)(implicit myShard : U=>List[V]) : JobID;
+  def shard[U,V](it : U)(implicit myShard : (U,Int)=>List[V]) : JobID;
 
   /**
    * Low level operation: should generally not be used, but made public for completeness. 
@@ -88,7 +88,7 @@ private object Priv {
 
   // Messages to the scheduler from the disributor
   sealed case class SchedMsg;
-  case class Shard[U,V](it : U, shard : U=>List[V]) extends SchedMsg;
+  case class Shard[U,V](it : U, shard : (U,Int)=>List[V]) extends SchedMsg;
   case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
   case class Get[T,U](job : JobID, f : T => U, gather : Actor) extends SchedMsg;
   case class Remove[U](job : JobID) extends SchedMsg;
@@ -96,7 +96,7 @@ private object Priv {
 
   sealed case class WorkerMsg;
   case class Do(id : JobID, f : Any=>Any, out : JobID) extends WorkerMsg;
-  case class Retrieve[T,U](in : JobID, f : Any=>Any, out : JobID, actor : SerializedActor) extends WorkerMsg;
+  case class Retrieve[T,U](in : JobID, f : Any=>Any, out : JobID, actor : Either[Actor,SerializedActor]) extends WorkerMsg;
   case class DoneAdding(id : JobID) extends WorkerMsg;
   case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
   case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
@@ -148,8 +148,6 @@ trait DistributedIterable[+T] extends Iterable[T] {
       override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(f andThen g);
     }
   }
-
-
 }
 
 
@@ -162,13 +160,13 @@ trait DistributedIterable[+T] extends Iterable[T] {
  */
 class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   override def distribute[T] (it : Iterable[T])
-    (implicit myShard : Iterable[T]=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
+    (implicit myShard : (Iterable[T],Int)=>List[Iterable[T]]) : DistributedIterable[T]  = new InternalIterable[T] {
         protected lazy val id : JobID = shard(it)(myShard);
         protected lazy val scheduler = ActorDistributor.this;
       };
 
   // pushes data onto the grid
-  def shard[U,V](it : U)(implicit myShard : U=>List[V]) = (scheduler !?Shard(it,myShard)).asInstanceOf[JobID];
+  def shard[U,V](it : U)(implicit myShard : (U,Int)=>List[V]) = (scheduler !?Shard(it,myShard)).asInstanceOf[JobID];
   // runs a task on some data on the grid
   def schedule[T,U](id : JobID, f: T=>U) = (scheduler !? Sched(id,f.asInstanceOf[Any=>Any])).asInstanceOf[JobID];
   // gets it back using some function. Returns immediately. expect output from gather
@@ -183,12 +181,12 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
 
   override def close = {
     scheduler ! Exit(self,'close);
-    workers.foreach(_ ! Close);
+    workers.foreach(_._2 ! Close);
   }
   // private stuff:
   classLoader = this.getClass.getClassLoader;
 
-  private val accumulator = transActor(port,'accumulator) {
+  private val gatherer = actor {
     val gatherers = mutable.Map[JobID,Actor]();
     val shardsLeft = mutable.Map[JobID,Int]();
     loop {
@@ -209,6 +207,24 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
     }
   }
 
+  // Accumulator is a remote actor, so it just acts a middle man for gatherer.
+  // Otherwise, potentially large amounts of data would get serialized in the gather closure for no reason.
+  private lazy val remoteAccumulator = transActor(port,'accumulator) {
+    loop {
+      react {
+        case x => gatherer ! x
+      }
+    }
+  }
+
+  private val localAccumulator = actor {
+    loop {
+      react {
+        case x => gatherer ! x
+      }
+    }
+  }
+
   // central dispatcher for ActorDistributor
   private val scheduler = actor {
     val numShards = mutable.Map[JobID,Int]();
@@ -223,14 +239,14 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
         case scala.actors.Exit(_,_) => exit();
         case Shard(it,shard)=> 
           val job = getNextJob();
-          val shards = shard(it)
+          val shards = shard(it,workers.length)
           numShards += (job -> shards.length);
           shards.zipWithIndex.foreach {
             x => 
             Debug.info( "sending shard " + x._2 + " to Worker " + x._2 %workers.length);
-            workers(x._2 % workers.length) ! Done(job,x._2,x._1)
+            workers(x._2 % workers.length)._2 ! Done(job,x._2,x._1)
           }
-          workers.foreach { _ ! DoneAdding(job) }
+          workers.foreach { _._2 ! DoneAdding(job) }
           reply { job }
         case Sched(in,f)=> 
           val job = getNextJob();
@@ -238,26 +254,27 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
           numShards += (job -> oldNumShards);
           Debug.info( "Running " + f.getClass.getName() + " on job " + in + "'s output as job " + job);
           workers.foreach { a =>  
-            a ! Do(in, f, job)
+            a._2 ! Do(in, f, job)
           }
           reply { job }
-        case Get(in,f,gatherer)=>
+        case Get(in,f,gather)=>
           val out = getNextJob();
-          Debug.info( "Getting job "  + in  + "with function " + f.getClass.getName() + " as job id " + out);
-          accumulator !? StartGet(out,numShards(in),gatherer);
-          workers.foreach{ _ ! Retrieve(in,f.asInstanceOf[Any=>Any],out,accumulator)}
+          Debug.info( "Getting job "  + in  + " with function " + f.getClass.getName() + " as job id " + out);
+          gatherer !? StartGet(out,numShards(in),gather);
+          workers.foreach{ a => a._2 ! Retrieve(in,f.asInstanceOf[Any=>Any],out,if(a._1) Left(localAccumulator) else Right(remoteAccumulator))}
         case AddWorker(a)=> 
           Debug.info("Added a worker.");
-          workers += a; 
+          workers += (false,a); // TODO:improve 
         
-        case Remove(id) => Debug.info("Master removing job " + id); workers.foreach{ _ ! Remove(id)}
+        case Remove(id) => Debug.info("Master removing job " + id); workers.foreach{ _._2 ! Remove(id)}
       }
     }
   }
 
-  private val workers =  new ArrayBuffer[OutputChannel[Any]];
+  // boolean says i'm local and don't need to serialize things
+  private val workers =  new ArrayBuffer[(Boolean,OutputChannel[Any])];
   for (val i <- List.range(0,numWorkers))
-    workers += Worker();
+    workers += (true,Worker());
 }
 
 private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
@@ -304,7 +321,7 @@ private[smr] object InternalIterable {
         }
       }
     }
-    self.scheduler.gather(self.id,f, recv);
+    self.scheduler.gather(self.id, f, recv);
     (recv !? 'start).asInstanceOf[ArrayBuffer[(Int,U)]];
   }
 

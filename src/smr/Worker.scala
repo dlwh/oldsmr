@@ -65,7 +65,11 @@ class Worker extends Actor {
         //println("external " + id);
         getAcc(id) !? DoneAdding(id);
         case Retrieve(id,f,out,a) => 
-        val a2 = SerializedActorToActor(a);
+        val a2 = a match {
+          case Right(a) =>println("Darn!"); SerializedActorToActor(a);
+          case Left(a) => a
+        }
+
         getAcc(id) ! Retr(id,{
             x : (Int,Any) =>actual_worker ! { () => a2 ! Retrieved(out,x._1,f(x._2)); }; 
           });

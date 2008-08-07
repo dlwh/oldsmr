@@ -25,11 +25,6 @@ package smr;
 import scala.collection.mutable.ArrayBuffer;
 
 /**
- * Used as an implicit for the defaults object. Designed to minimize implicit-space conflicts.
- */
-sealed case class NumShards(n : Int);
-
-/**
  * Object to hold various sensible defaults for SMR. Expected use:
  * <pre>
  * import smr.defaults._;
@@ -40,32 +35,27 @@ sealed case class NumShards(n : Int);
 object defaults {
 
   /**
-   * Suppose we only want 5 shards by default.
-   */
-  implicit val defaultNumShards = NumShards(4);
-
-  /**
    * Implicit shard function that provides a reasonable default in most cases. Special treatment for
-   * Ranges and for Collections
+   * Ranges and for Seqs
    */
-  implicit def shard[T] (it : Iterable[T])(implicit numShards : NumShards) : List[Iterable[T]] = it match {
-    case x : scala.Range.Inclusive => shardIRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
-    case x : scala.Range=> shardRange(x)(numShards).asInstanceOf[List[Iterable[T]]];
-    case x : Collection[_] => 
-    if(x.size < numShards.n) {
+  implicit def shard[T] (it : Iterable[T], numShards : Int) : List[Iterable[T]] = it match {
+    case x : scala.Range.Inclusive => shardIRange(x,numShards).asInstanceOf[List[Iterable[T]]];
+    case x : scala.Range=> shardRange(x,numShards).asInstanceOf[List[Iterable[T]]];
+    case x : Seq[_] => 
+    if(x.size < numShards) {
      List(x) 
     } else {
-      val sz = x.size / numShards.n;
+      val sz = x.size / numShards;
       val arrs = new ArrayBuffer[Iterable[T]]
-      arrs ++= (for(val i <- 0 until numShards.n ) yield x.elements.drop(sz * i).take(sz).toList);
+      arrs ++= (for(val i <- 0 until numShards ) yield x.drop(sz * i).take(sz).toList);
       arrs.toList
     }
     case _ =>
     val arrs = new ArrayBuffer[ArrayBuffer[T]]
-    arrs ++= (for(val i <- 1 to numShards.n) yield new ArrayBuffer[T]);
+    arrs ++= (for(val i <- 1 to numShards) yield new ArrayBuffer[T]);
     val elems = it.elements
     var i = 0;
-    while(elems.hasNext) { arrs(i%numShards.n) += elems.next; i += 1}
+    while(elems.hasNext) { arrs(i%numShards) += elems.next; i += 1}
     arrs.toList
   }
   implicit def fakeDistributedIterable[T](it : Iterable[T]):DistributedIterable[T] = new DistributedIterable[T] {
@@ -75,16 +65,16 @@ object defaults {
     def elements = it.elements;
   }
 
-  private def shardRange (r : scala.Range)(implicit numShards : NumShards) : List[Iterable[Int]]=  {
+  private def shardRange (r : scala.Range, numShards : Int) : List[Iterable[Int]]=  {
     val arrs = new ArrayBuffer[Range]
-    val n = numShards.n;
+    val n = numShards;
     arrs ++= (for(val i<- 0 until n) yield new Range(r.start + i * r.step,r.end,n * r.step));
     arrs.toList
   }
 
-  private def shardIRange (r : scala.Range.Inclusive)(implicit numShards : NumShards) : List[Iterable[Int]]= {
+  private def shardIRange (r : scala.Range.Inclusive, numShards : Int) : List[Iterable[Int]]= {
     val arrs = new ArrayBuffer[Range.Inclusive]
-    val n = numShards.n;
+    val n = numShards;
     arrs ++= (for(val i<- 0 until n) yield new Range.Inclusive(r.start + i * r.step ,r.end,n * r.step));
     arrs.toList
   }
