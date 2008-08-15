@@ -25,14 +25,14 @@ package smr;
 import scala.collection.mutable.ArrayBuffer;
 
 /**
- * Object to hold various sensible defaults for SMR. Expected use:
+ * Object to hold various sensible Defaults for SMR. Expected use:
  * <pre>
- * import smr.defaults._;
+ * import smr.Defaults._;
  * </pre>
  * 
  * @author dlwh
  */
-object defaults {
+object Defaults extends SerializedImplicits {
 
   /**
    * Implicit shard function that provides a reasonable default in most cases. Special treatment for
@@ -79,59 +79,58 @@ object defaults {
     arrs.toList
   }
 
+  /** 
+  * Borrowed from scala source. Just add the annotation tag.
+  * Part of the Scala API.
+  * original author: @author  Stephane Micheloud
+  */
+  @serializable
+  private[Defaults] class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
+    if (step == 0) throw new Predef.IllegalArgumentException
 
-/** 
- * Borrowed from scala source. Just add the annotation tag.
- * Part of the Scala API.
- * original author: @author  Stephane Micheloud
- */
-@serializable
-private[defaults] class Range(val start: Int, val end: Int, val step: Int) extends RandomAccessSeq.Projection[Int] {
-  if (step == 0) throw new Predef.IllegalArgumentException
+    /** Create a new range with the start and end values of this range and
+    *  a new <code>step</code>.
+    */
+    def by(step: Int): Range = new Range(start, end, step)
 
-  /** Create a new range with the start and end values of this range and
-   *  a new <code>step</code>.
-   */
-  def by(step: Int): Range = new Range(start, end, step)
-
-  lazy val length: Int = {
-    if (start < end && this.step < 0) 0
-    else if (start > end && this.step > 0) 0
-    else {
-      val base = if (start < end) end - start
-                 else start - end
-      assert(base >= 0)
-      val step = if (this.step < 0) -this.step else this.step
-      assert(step >= 0)
-      base / step + last(base, step)
+      lazy val length: Int = {
+      if (start < end && this.step < 0) 0
+      else if (start > end && this.step > 0) 0
+      else {
+        val base = if (start < end) end - start
+        else start - end
+        assert(base >= 0)
+        val step = if (this.step < 0) -this.step else this.step
+        assert(step >= 0)
+        base / step + last(base, step)
+      }
     }
-  }
 
-  protected def last(base: Int, step: Int): Int =
+    protected def last(base: Int, step: Int): Int =
     if (base % step != 0) 1 else 0
 
-  def apply(idx: Int): Int = {
-    if (idx < 0 || idx >= length) throw new Predef.IndexOutOfBoundsException
-    start + (step * idx)
-  }
+    def apply(idx: Int): Int = {
+      if (idx < 0 || idx >= length) throw new Predef.IndexOutOfBoundsException
+      start + (step * idx)
+    }
 
-  /** a <code>Seq.contains</code>, not a <code>Iterator.contains</code>! */
-  def contains(x: Int): Boolean = 
-    if (step > 0) 
+    /** a <code>Seq.contains</code>, not a <code>Iterator.contains</code>! */
+    def contains(x: Int): Boolean = 
+      if (step > 0) 
       x >= start && x < end && (((x - start) % step) == 0)
     else 
       x <= start && x > end && (((x - end) % step) == 0)
 
-  def inclusive = new Range.Inclusive(start,end,step)
-}
+    def inclusive = new Range.Inclusive(start,end,step)
+    }
 
-private[defaults] object Range {
-  @serializable
-  private[defaults] class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
-    override def apply(idx: Int): Int = super.apply(idx)
-    override protected def last(base: Int, step: Int): Int = 1
-    override def by(step: Int): Range = new Inclusive(start, end, step)
+  private[Defaults] object Range {
+    @serializable
+    private[Defaults] class Inclusive(start: Int, end: Int, step: Int) extends Range(start, end, step) {
+      override def apply(idx: Int): Int = super.apply(idx)
+      override protected def last(base: Int, step: Int): Int = 1
+      override def by(step: Int): Range = new Inclusive(start, end, step)
+    }
   }
-}
 
 }

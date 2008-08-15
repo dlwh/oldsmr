@@ -66,12 +66,16 @@ object Hub {
     server.close();
     return port;
   }
+
+  def workers(machine : String, port : Int) = {
+    (Hub(machine,port) ! Hub.HubListRequest());
+    val workers : List[(Symbol,String,Int)] = self.?.asInstanceOf[HubListResponse].workers;
+    workers map ((x:(Symbol,String,Int)) => select(Node(x._2,x._3),x._1)) 
+  }
   
   def distributor(machine : String, port : Int) : ActorDistributor = {
-    (Hub(machine,port) ! Hub.HubListRequest());
-    val workers : List[(Symbol,String,Int)] = self.?.asInstanceOf[HubListResponse].workers
     val distributor = new ActorDistributor(0, freePort())
-    workers map ((x:(Symbol,String,Int)) => select(Node(x._2,x._3),x._1)) foreach distributor.addWorker
+    workers(machine,port) foreach distributor.addWorker
     distributor
   }
   

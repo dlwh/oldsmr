@@ -140,12 +140,12 @@ trait DistributedIterable[+T] extends Iterable[T] {
     val parent = this;
     new DistributedIterable[U] {
       def elements = parent.elements.map(f);
-      override def map[C](g : U=>C) = parent.map(f andThen g);
-      override def flatMap[C](g: U=>Iterable[C]) = parent.flatMap(f andThen g);
+      override def map[C](g : U=>C) = parent.map(Util.andThen(f,g));
+      override def flatMap[C](g: U=>Iterable[C]) = parent.flatMap(Util.andThen(f,g));
       override def filter(g: U=>Boolean) = parent.map(f).filter(g);
       override def reduce[C >:U](g : (C,C) =>C) : C= parent.mapReduce[U,C](f)(g)
-      override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](f andThen m)(r);
-      override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(f andThen g);
+      override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](Util.andThen(f,m))(r);
+      override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(Util.andThen(f,g));
     }
   }
 }
@@ -283,7 +283,8 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
   import InternalIterable._;
 
   def elements = {
-    handleGather(this,identity[Iterable[T]]).toList.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
+    val list : List[(Int,Iterable[T])] = handleGather(this,Util.identity[Iterable[T]]).toList;
+    list.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
   }
 
   override def map[U](f : T=>U) : DistributedIterable[U] = handleMap(this,f);
@@ -307,7 +308,7 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
  * even if you don't use any state. Objects don't have that restriction.
  */
 private[smr] object InternalIterable {
-  private def handleGather[T,C,U](self : InternalIterable[T], f : C=>U) = {
+  private def handleGather[T,C,U](self : InternalIterable[T], f : SerFunction1[C,U]) = {
     val recv = actor { 
       val b = new ArrayBuffer[(Int,U)];
       react {
@@ -346,19 +347,24 @@ private[smr] object InternalIterable {
   }
 
   private def handleReduce[T,B>:T](self : InternalIterable[T], f : (B,B)=>B) =  {
-    val b = handleGather[T,Iterable[T],Option[B]](self,(x : Iterable[B])=> if (x.isEmpty) None else Some(x.reduceLeft(f)))
+    val b = handleGather[T,Iterable[T],Option[B]](self,new SerFunction1[Iterable[T],Option[B]]{
+        def apply(x : Iterable[T])= if (x.isEmpty) None else Some(x.reduceLeft(f));
+    });
     b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(f);
   }
 
   private def handleMapReduce[T,U,B>:U](self :InternalIterable[T], m : T=>U, r : (B,B)=>B) = {
     Debug.info("MapReduce with " + m.getClass.getName + " and reduce " + r.getClass.getName);
-    def doMapReduce(x : Iterable[T]) = {
-      if (x.isEmpty) None 
-      else {
-        var elems = x.elements;
-        var acc : B = m(elems.next);;
-        while(elems.hasNext) acc= r(acc,m(elems.next));
-        Some(acc);
+  
+    val doMapReduce = new SerFunction1[Iterable[T],Option[B]] {
+      def apply(x : Iterable[T])  = {
+        if (x.isEmpty) None 
+        else {
+          var elems = x.elements;
+          var acc : B = m(elems.next);;
+          while(elems.hasNext) acc= r(acc,m(elems.next));
+          Some(acc);
+        }
       }
     }
     val b = handleGather[T,Iterable[T],Option[B]](self,doMapReduce);

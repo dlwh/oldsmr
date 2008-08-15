@@ -24,8 +24,23 @@
 package smr;
 
 object Util {
-  def identity[T] = (x : T)  => x;
-  def fMap[T,U](f : T=>U) : (Iterable[T])=>Iterable[U] = (x : Iterable[T]) => x.map(f);
-  def fFlatMap[T,U](f : T=>Iterable[U]) : (Iterable[T])=>Iterable[U] = (x : Iterable[T]) => x.flatMap(f);
-  def fFilter[T](f : T=>Boolean) : (Iterable[T])=>Iterable[T] = (x : Iterable[T]) => x.filter(f);
+  def identity[T] = new SerFunction1[T,T] {
+    def apply(x : T)  = x;
+  };
+  def fMap[T,U](f : T=>U) = new SerFunction1[Iterable[T],Iterable[U]] {
+    def apply(x : Iterable[T]) = x.map(f);
+  };
+  def fFlatMap[T,U](f : T=>Iterable[U])  = new SerFunction1[Iterable[T],Iterable[U]] {
+    def apply(x : Iterable[T]) = x.flatMap(f);
+  };
+
+  def fFilter[T](f : T=>Boolean) = new SerFunction1[Iterable[T],Iterable[T]] { 
+    def apply(x : Iterable[T]) = x.filter(f);
+  };
+
+  // g(f(x))
+  def andThen[A,B,C](f: A=>B, g:B=>C) = new SerFunction1[A,C] {
+   def apply(a : A) = g(f(a));
+  }
+
 }
