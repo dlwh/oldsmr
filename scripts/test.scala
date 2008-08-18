@@ -1,5 +1,5 @@
 import smr._;
-import smr.defaults._;
+import smr.Defaults._;
 
 //scala.actors.Debug.level = 10;
 val x = new ActorDistributor(4,9010);

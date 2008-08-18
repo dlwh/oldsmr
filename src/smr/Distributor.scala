@@ -183,8 +183,6 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
     scheduler ! Exit(self,'close);
     workers.foreach(_._2 ! Close);
   }
-  // private stuff:
-  classLoader = this.getClass.getClassLoader;
 
   private val gatherer = actor {
     val gatherers = mutable.Map[JobID,Actor]();
@@ -209,7 +207,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
 
   // Accumulator is a remote actor, so it just acts a middle man for gatherer.
   // Otherwise, potentially large amounts of data would get serialized in the gather closure for no reason.
-  private lazy val remoteAccumulator = transActor(port,'accumulator) {
+  private val remoteAccumulator = transActor(port,'accumulator) {
     loop {
       react {
         case x => gatherer ! x
@@ -250,8 +248,8 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
           reply { job }
         case Sched(in,f)=> 
           val job = getNextJob();
-          val oldNumShards = numShards.get(in).get;
-          numShards += (job -> oldNumShards);
+          val oldNumShards = numShards(in);
+          numShards += (job->oldNumShards);
           Debug.info( "Running " + f.getClass.getName() + " on job " + in + "'s output as job " + job);
           workers.foreach { a =>  
             a._2 ! Do(in, f, job)
@@ -316,7 +314,9 @@ private[smr] object InternalIterable {
         val replyTo = Actor.sender;
         loop {
           react{
-            case Some(x) => b += x.asInstanceOf[(Int,U)];
+            case Some(x) => 
+              b += x.asInstanceOf[(Int,U)]; 
+              Debug.info("Got shard " + x.asInstanceOf[(Int,U)]._1);
             case None => replyTo ! b ; exit();
           }
         }
@@ -350,7 +350,7 @@ private[smr] object InternalIterable {
     val b = handleGather[T,Iterable[T],Option[B]](self,new SerFunction1[Iterable[T],Option[B]]{
         def apply(x : Iterable[T])= if (x.isEmpty) None else Some(x.reduceLeft(f));
     });
-    b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(f);
+    b.filter(None!=).map{ (x : (Int,Option[B])) => x._2.get}.reduceLeft(f);
   }
 
   private def handleMapReduce[T,U,B>:U](self :InternalIterable[T], m : T=>U, r : (B,B)=>B) = {
@@ -368,6 +368,6 @@ private[smr] object InternalIterable {
       }
     }
     val b = handleGather[T,Iterable[T],Option[B]](self,doMapReduce);
-    b.filter(None!=).map{ (x : (Int,Option[B])) => println(x._1); x._2.get}.reduceLeft(r);
+    b.filter(None!=).map{ (x : (Int,Option[B])) => x._2.get}.reduceLeft(r);
   }
 }

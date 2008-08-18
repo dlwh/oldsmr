@@ -34,157 +34,172 @@ import scala.actors.remote.Node;
 import Distributor._;
 import Priv._;
 
-class Worker extends Actor {
+class Worker(port : Int, sym : Symbol) extends Actor {
   import Worker._;
 
+  def this() = this(Util.freePort,'worker);
+
+  start();
+
   def act() {
+    alive(port);
+    register(sym,Actor.self);
+
     trapExit = true;
-    val actual_worker = realWorker(Actor.self);
-    val accumulators = mutable.Map[JobID,Actor]();
+
+    val actual_worker = new RealWorker();
+    val accumulators = mutable.Map[JobID,Accumulator]();
     def getAcc(id : JobID) ={ 
-      accumulators.getOrElseUpdate(id,Worker.accumulator(id));
+      accumulators.getOrElseUpdate(id,new Accumulator(id));
     }
+
     loop {
       react {
-        case Enliven(port,sym)=>
-          alive(port);
-          register(sym,Actor.self);
-          reply{None}
-        case Do(in,f,out) => 
-         getAcc(in) ! Forward(getAcc(out));
-         val outA = getAcc(out);
-         getAcc(in) ! Retr(in,{
-            x : (Int,Any) => 
-              actual_worker ! { () => 
-              outA ! Done(out,x._1,f(x._2))};
-          });
-        case Done(id,s,r)=> 
-          getAcc(id) ! Done(id,s,r);
-          Debug.info( "Worker storing job " + id + " shard " + s);
-        case DoneAdding(id) => 
-        //println("external " + id);
-        getAcc(id) !? DoneAdding(id);
-        case Retrieve(id,f,out,a) => 
-        val a2 = a match {
-          case Right(a) =>println("Darn!"); SerializedActorToActor(a);
-          case Left(a) => a
-        }
-
-        getAcc(id) ! Retr(id,{
-            x : (Int,Any) =>actual_worker ! { () => a2 ! Retrieved(out,x._1,f(x._2)); }; 
-          });
-        case Reserve(id,shard) => 
-        getAcc(id) !? Add(shard);
+        case msg @ Do(in,f,out) => 
+          //Debug.info(msg + "");
+          val outAcc = getAcc(out);
+          getAcc(in).forwardShardNums(outAcc);
+          getAcc(in).addShardListener {  case (shard,data) =>
+            actual_worker.enqueue { _ =>
+              val outData = f(data);
+              outAcc.completeShard(shard,outData);
+            }
+          }
+        case Done(id,s,r)=>getAcc(id).completeShard(s,r);
+        case Reserve(id,shard) => getAcc(id).reserveShard(shard);
+        case DoneAdding(id) => getAcc(id).doneReserving();
+        case rtr @ Retrieve(id,f,out,a) => 
+          val realActor = a match {
+            case Right(a) => SerializedActorToActor(a);
+            case Left(a) => a
+          }
+          //Debug.info(rtr + "");
+          // Push it off to the accumulator, have it forward things to the job runner
+          getAcc(id).addShardListener{ case (shard,data) =>
+            actual_worker.enqueue { _ =>
+              realActor ! Retrieved(out,shard,f(data));
+            }
+          }
         case Close=>
           Debug.info("Worker " + self + " shutting down");
-          actual_worker ! Exit(self,'close);
-          accumulators.values.map(_ ! Exit(self,'close));
+          actual_worker.close();
+          accumulators.values.foreach(_.close());
           exit();
         case Remove(id) => 
-        val a = accumulators.get(id)
+          val a = accumulators.get(id);
           accumulators -= id;
-          Debug.info("Worker " + self + " Removing job " + id);
-          a.map( _ ! Exit(self,'remove));
+          Debug.info("Worker " + self + " removing job " + id);
+          a.foreach( _.close());
         case x =>
-          Debug.error( "Wrong input to worker!" + x);
+          Debug.error( "Wrong input to worker! " + x);
       }
     }
   }
 
-  // private stuff:
-  classLoader = this.getClass.getClassLoader;
 }
 
 object Worker {
-  // intra worker communication:
-  private case class Add(shard : Int); 
-  private case class Forward(out : Actor); 
-  private case class Enliven(port : Int,sym : Symbol);
+  def apply()  = new Worker();
+  def apply(port : Int, sym : Symbol) = new Worker(port,sym);
 
-  private case class Retr(id: JobID, f : ((Int,Any))=>Unit); 
-
-  def apply()  : Worker = {
-    val w = new Worker();
-    w.start();
-    w;
+  /*
+  def setClassLoaderFromClass(c : Class[_]) {
+    scala.actors.remote.RemoteActor.classLoader = classLoaderToUse
+    classLoaderToUse = c.getClassLoader();
   }
 
-  def apply(port : Int, sym : Symbol) : Worker = {
-    val w = apply();
-    w ! Enliven(port,sym);
-    w
-  }
+  private var classLoaderToUse = this.getClass.getClassLoader();
+*/
+  private class Accumulator(id : JobID) {
+    private case class Forward(out : Accumulator); 
+    private case class Add(shard : Int); 
+    private case class Retr(f : ((Int,Any))=>Unit); 
 
-  private def accumulator(id : JobID) = actor {
-    val active = mutable.Set[Int]();
-    val done = mutable.Map[Int,Any]();
-    val awaiting = new ArrayBuffer[Actor]();
-    var doneAdding = false;
-    loop {
-      react {
-        case Exit(a,f) => done.clear(); exit();
-        case Forward(out) =>
-          //println("forward" + id + " to " + out);
-          if(doneAdding) {
-            active.foreach { x =>  out !? Add(x)}
-            done.keys.foreach{ x => out !? Add(x)}
-            out !? DoneAdding(1);
-            //println("fast done" + id);
-          } else {
-            val a =  actor {
-              //println("waiting on signal");
-              react {
-                case DoneAdding(_) => 
-                  done.keys.foreach{ out ! Add(_)}
-                  out ! DoneAdding(1);
-                  //println("slow");
-              } 
+    def forwardShardNums(out : Accumulator) = inner ! Forward(out);
+    def completeShard(shard : Int, data : Any) = inner ! Done(id,shard,data);
+    def addShardListener(f :  ((Int,Any))=>Unit) = inner ! Retr(f);
+    def reserveShard(shard : Int) = inner ! Add(shard);
+    def doneReserving() = inner ! DoneAdding(0);
+    def close() = inner ! Close
+
+    private val inner : Actor =actor {
+      val active = mutable.Set[Int]();
+      val done = mutable.Map[Int,Any]();
+      val awaiting = new ArrayBuffer[((Int,Any))=>Unit]();
+      val waitingForDoneReservation = new ArrayBuffer[Unit=>Unit]();
+      var doneAdding = false;
+      var shouldExit = false;
+
+      def checkFinished() {
+        if(doneAdding && active.size == 0) {
+          awaiting.foreach{f => done.foreach(f)}
+          awaiting.clear();
+          if(shouldExit) exit();
+        }
+      }
+
+      loop {
+        react {
+          case Add(s) => 
+            if(doneAdding) Debug.warning("Got a late add");
+            if(!done.contains(s)) active += s
+          case Close => 
+            if(awaiting.isEmpty)  {
+              done.clear();
+              waitingForDoneReservation.clear();
+              exit();
             }
-            if(doneAdding && active.size == 0) a !  DoneAdding(0);
-            else awaiting += a
-          }
-        case Retr(id,f) => 
-          //println(Retr(id,f));
-          val a =  actor {
-            react {
-              case DoneAdding(_) => 
-              //println("Retr go!" + id);
-              done.foreach(f)
-            } 
-          }
-          if(doneAdding && active.size == 0) a !  DoneAdding(0);
-          else awaiting += a
-        case DoneAdding(_) => 
-          //println("doneA" + id + "from" + Actor.sender);
-          doneAdding = true;
-          if(active.size == 0) {
-            awaiting.foreach(_ ! DoneAdding(0));
-          }
-          reply{None}
-        case Add(s) => 
-          //println("adding" + s + " to " + id + "from " + Actor.sender);
-          if(doneAdding) println("Warning: " + id + " got Add for shard " + s + "after doneAdding");
-          if( !(done contains s)) active += s
-          reply(None);
-        case Done(x,s,r) => 
-          //println("Done" + x + " " + s);
-          active -= s; 
-          done += (s->r);
-          if(doneAdding && active.size == 0) {
-            awaiting.foreach(_ ! DoneAdding(0));
-          }
-        case x =>
-          Debug.error( "Wrong input to worker!" + x);
+            shouldExit = true;
+          case Forward(out) =>
+            val f = { _: Unit => 
+              active.foreach { sh =>  out.reserveShard(sh)}
+              done.keys.foreach { sh =>  out.reserveShard(sh)}
+              out.doneReserving();
+            }
+            if(doneAdding) f();
+            else  waitingForDoneReservation += f;
+
+          case Retr(f) => 
+            if(doneAdding && active.size==0) {
+              done.foreach(f);
+            } else {
+              awaiting += f;
+            }
+          case msg @ DoneAdding(dbg) => 
+            doneAdding = true;
+            waitingForDoneReservation foreach { f => f()}
+            waitingForDoneReservation.clear();
+            checkFinished();
+
+          case Done(_,s,r) => 
+            active -= s; 
+            done += (s->r);
+            checkFinished();
+          case x => Debug.error( "Wrong input to accumulator!" + x);
+        }
       }
     }
   }
-  def realWorker(manager :Actor) = actor { 
+
+  private class RealWorker {
+    private case class Enqueue(f : Unit=>Unit);
+    def enqueue(f : Unit=>Unit) = inner ! Enqueue(f);
+    def close() = inner ! Exit(Actor.self,'closed);
+      
+    private val inner = actor { 
       loop {
         react {
           case Exit(_,_) => exit();
-          case f : Function0[_] => try {  f(); } catch { case x => x.printStackTrace();}
+          case Enqueue(f) => try {
+            f();
+          } catch {
+            case x =>
+            // todo: better error reporting
+            x.printStackTrace();
+          }
           case x => Debug.error( "Wrong input to realWorker!" + x);
         }
       }
     }
+  }
 }

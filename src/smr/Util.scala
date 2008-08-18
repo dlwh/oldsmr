@@ -43,4 +43,10 @@ object Util {
    def apply(a : A) = g(f(a));
   }
 
+  def freePort() : Int = {
+    val server = new java.net.ServerSocket(0);
+    val port = server.getLocalPort();
+    server.close();
+    return port;
+  }
 }

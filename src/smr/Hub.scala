@@ -15,17 +15,18 @@ import scala.actors.remote.RemoteActor._
 /**
  * A hub stores a list of active Workers.
  */
-class Hub extends Actor {
+class Hub(port : Int) extends Actor {
   import Hub._
+  def this() = this(Util.freePort);
 
   private var workers : List[(Symbol,String,Int)] = Nil
   
-  println("Hub: registering as hub on port 9000")
+  println("Hub: registering as hub on port " + port)
 
   start()
   
   override def act() {
-    alive(9000)
+    alive(port)
     register('hub, self)
     
     loop {
@@ -43,6 +44,7 @@ class Hub extends Actor {
     }
   }
   
+  println("access");
   scala.actors.remote.RemoteActor.classLoader = classOf[Hub].getClassLoader 
 }
 
@@ -54,17 +56,12 @@ object Hub {
   case class HubRegister(name : Symbol, machine : String, port : Int)
   case class HubListRequest
   case class HubListResponse(workers : List[(Symbol,String,Int)])
+
+  import Util._;
   
   def apply(machine : String, port : Int) : OutputChannel[Any] = {
     scala.actors.remote.RemoteActor.classLoader = classOf[Hub].getClassLoader
     return select(Node(machine,port),'hub)
-  }
-  
-  def freePort() : Int = {
-    val server = new java.net.ServerSocket(0);
-    val port = server.getLocalPort();
-    server.close();
-    return port;
   }
 
   def workers(machine : String, port : Int) = {
@@ -105,17 +102,24 @@ object SpawnHub {
  */
 object SpawnWorker {
   def main(argv : Array[String]) {
-    scala.actors.remote.RemoteActor.classLoader = classOf[Hub].getClassLoader
     scala.actors.Debug.level = 10;
+    if(argv.length < 2) {
+      println("Syntax: SpawnWorker <host> <port> [numWorkers] [classLoader class]");
+    }
+
+    scala.actors.remote.RemoteActor.classLoader = if(argv.length > 3)  Class.forName(argv(3)).getClassLoader else classOf[Hub].getClassLoader
+
+    val numWorkers = if(argv.length > 2) java.lang.Integer.parseInt(argv(2)) else Runtime.getRuntime.availableProcessors;
     
     val hub  = select(Node(argv(0),java.lang.Integer.parseInt(argv(1))), 'hub)
 
     val host = java.net.InetAddress.getLocalHost().getHostName()
-    var port = Hub.freePort()
 
-    val worker = Worker(port,'worker);
-    
-    hub ! Hub.HubRegister('worker, host, port)
+    for(i <- 1 to numWorkers) {
+      var port = Util.freePort()
+      val worker = Worker(port,'worker);
+      hub ! Hub.HubRegister('worker, host, port)
+    }
 
     println("Worker: starting")
   }
