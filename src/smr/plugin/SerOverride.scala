@@ -19,7 +19,7 @@ class SerOverride(val global: Global) extends Plugin {
     def newPhase(prev: Phase) = new SerOverridePhase(prev)    
   }
   
-  private class SerOverride(prev: Phase) extends Phase(prev) {
+  private class SerOverridePhase(prev: Phase) extends Phase(prev) {
     def name = SerOverride.this.name
     def run {
       for (unit <- currentRun.units; 
