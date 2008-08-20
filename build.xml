@@ -1,4 +1,4 @@
-<project name="smr" default="compile" basedir=".">
+<project name="smr" default="all" basedir=".">
   <property name="src.dir" value="src/"/>
   <property name="build.dir" value="classes"/>
   <property name="docs.dir" value="docs"/>
@@ -36,5 +36,17 @@
       <include  name="**/*.scala"/>
     </scaladoc>
   </target>
+
+  <target name="plugin" depends="compile"> 
+    <mkdir dir="jars"/>
+    <jar destfile="jars/seroverride.jar">
+      <fileset dir="classes/"
+        includes="**/plugin/*.class"
+        />
+      <fileset dir="misc"/>
+    </jar>   
+  </target>   
+
+  <target name="all" depends="compile,plugin"/>
 
 </project>
