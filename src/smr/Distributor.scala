@@ -72,6 +72,13 @@ trait Distributor {
   def gather[T,U](job : JobID, f: T=>U, gather : Actor) :Unit;
 
   /**
+  * Take input shards of type T and creates a new set of shards U, which are processed.
+  * This can support a Google-style MapReduce
+  * @return a handle to the changed shards.
+  */
+  def groupBy[T,U,V](job : JobID, f: (T,((Int,U)=>Unit))=>Unit, received: Iterator[U]=>V): JobID;
+
+  /**
    * Low level operation: should generally not be used, but made public for completeness. 
    * Delete all shards with this id.
    * @return a handle to the changed shards.
@@ -82,6 +89,7 @@ trait Distributor {
    * Close the distributor and all workers.
    */
   def close() {}
+
 }
 
 private object Priv {
@@ -89,6 +97,7 @@ private object Priv {
   // Messages to the scheduler from the disributor
   sealed case class SchedMsg;
   case class Shard[U,V](it : U, shard : (U,Int)=>List[V]) extends SchedMsg;
+  case class GroupBy[T,U,V](job: JobID, f: (T,((Int,U)=>Unit))=>Unit, received: Iterator[U]=>V) extends SchedMsg;
   case class Sched(in : JobID, f : Any=>Any) extends SchedMsg;
   case class Get[T,U](job : JobID, f : T => U, gather : Actor) extends SchedMsg;
   case class Remove[U](job : JobID) extends SchedMsg;
@@ -96,7 +105,9 @@ private object Priv {
 
   sealed case class WorkerMsg;
   case class Do(id : JobID, f : Any=>Any, out : JobID) extends WorkerMsg;
+  case class InPlaceDo(id : JobID, f : Any=>Unit) extends WorkerMsg;
   case class Retrieve[T,U](in : JobID, f : Any=>Any, out : JobID, actor : Either[Actor,SerializedActor]) extends WorkerMsg;
+  case class GetOutputActor[U,V](isLocal : Boolean, out : JobID, shard : Int, process : Iterator[U]=>V) extends WorkerMsg;
   case class DoneAdding(id : JobID) extends WorkerMsg;
   case class Reserve(id : JobID, shard : Int) extends WorkerMsg;
   case class Done[U](id : JobID, shard : Int,  result : U) extends WorkerMsg;
@@ -128,6 +139,17 @@ trait DistributedIterable[+T] extends Iterable[T] {
   def mapReduce[U,R>:U](m : T=>U)(r : (R,R)=>R) : R = this.map(m).reduce(r);
 
   /**
+  * for each element, reshard the data by group(t)'s hashcode and create a new 
+  * Iterable with those elements.
+  */
+  def groupBy[U](group : T=>U) : DistributedIterable[(U,Iterable[T])];
+
+  /**
+  * Removes all copies of the elements.
+  */
+  def distinct() : DistributedIterable[T];
+
+  /**
    * Returns a "lazy" DistributedIterable that does not invoke the supplied 
    * operation until another non-lazy operation is applied.
    * Because this whole library is designed for large memory tasks,
@@ -146,6 +168,9 @@ trait DistributedIterable[+T] extends Iterable[T] {
       override def reduce[C >:U](g : (C,C) =>C) : C= parent.mapReduce[U,C](f)(g)
       override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](Util.andThen(f,m))(r);
       override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(Util.andThen(f,g));
+      // TODO: better partition
+      override def groupBy[V]( grp : U=>V) = parent.map(f).groupBy(grp);
+      override def distinct() = parent.map(f).distinct;
     }
   }
 }
@@ -174,6 +199,8 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   // gets rid of it:
   def remove(job : JobID) : Unit = (scheduler ! Remove(job));
 
+  def groupBy[T,U,V](job : JobID, f: (T,((Int,U)=>Unit))=>Unit, received: Iterator[U]=>V) =
+    (scheduler !? GroupBy(job,f,received)).asInstanceOf[JobID];
   /**
    * Adds a (possibly remote) Worker to the workers list. 
    */
@@ -255,6 +282,51 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
             a._2 ! Do(in, f, job)
           }
           reply { job }
+        case GroupBy(in, f, r) =>
+          // get type inference...
+          def handleGroupBy[T,U,V](in : JobID, f : ( (T,(Int,U)=>Unit)=>Unit), r : Iterator[U]=>V) {
+            val out = getNextJob();
+            val oldNumShards = numShards(in);
+            numShards += (out->oldNumShards);
+            // set up forwarding actors for the hashed outputs
+            val outActors = getOutActors(out, oldNumShards, r);
+            for( (isLocal,w) <- workers) {
+              w ! DoneAdding(out);
+            }
+
+            val localActors = outActors.map(getLocalActors);
+            def localOut(x : Any) {
+              def output(idx : Int, u : U) {
+                localActors(idx%localActors.length) ! Some(u);
+              }
+              f(x.asInstanceOf[T],output);
+              localAccumulator ! Retrieved(out,1,None);
+            }
+
+            val remoteActors = outActors.map(getRemoteActors);
+            def remoteOut(x :Any) {
+              def output(idx : Int, u : U) {
+                remoteActors(idx%remoteActors.length) ! Some(u);
+              }
+              f(x.asInstanceOf[T],output);
+              remoteAccumulator ! Retrieved(out,1,None);
+            }
+            val rendevezous = actor { 
+              loop {
+                react {
+                  case None =>
+                    localActors.foreach{ _ ! None};
+                  case _ => // don't care about results, just want to know when i'm done.
+                }
+              }
+            }
+            gatherer ! StartGet(out, oldNumShards, rendevezous);
+            for( (isLocal,w) <- workers) {
+              w ! InPlaceDo(in,if(!isLocal) remoteOut else localOut);
+            }
+            reply {out};
+          }
+          handleGroupBy(in,f,r);
         case Get(in,f,gather)=>
           val out = getNextJob();
           Debug.info( "Getting job "  + in  + " with function " + f.getClass.getName() + " as job id " + out);
@@ -268,7 +340,23 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
       }
     }
   }
+  private def getOutActors[U,V](out : JobID, numShards : Int, r : Iterator[U]=>V) = {
+    for(i <- 0 until numShards;
+        (isLocal,w) =  workers(i%numShards)) {
+      w ! GetOutputActor(isLocal, out, i, r);
+    }
+    val buff = new ArrayBuffer[(Option[Actor],SerializedActor)];
+    for( i <- 1 to numShards) {
+      buff += (Actor.?).asInstanceOf[(Option[Actor],SerializedActor)];
+    }
+    buff.toSeq;
+  }
 
+  private def getLocalActors(a : (Option[Actor],SerializedActor)):OutputChannel[Any] = a._1 match {
+    case Some(a) => a;
+    case None => a._2
+  }
+  private def getRemoteActors(a : (Option[Actor],SerializedActor)): OutputChannel[Any] = a._2;
   // boolean says i'm local and don't need to serialize things
   private val workers =  new ArrayBuffer[(Boolean,OutputChannel[Any])];
   for (val i <- List.range(0,numWorkers))
@@ -290,6 +378,8 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
   override def filter(f : T=>Boolean) : DistributedIterable[T] = handleFilter(this,f);
   override def reduce[B >: T](f : (B,B)=>B) : B = handleReduce(this,f)
   override def mapReduce[U,B >: U](m : T=>U)(r : (B,B)=>B) : B = handleMapReduce(this,m,r);
+  override def groupBy[U](group: T=>U):DistributedIterable[(U,Seq[T])] = handleGroupBy(this,group);
+  override def distinct() = handleDistinct(this);
 
   override protected def finalize() {
     try {
@@ -299,7 +389,6 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
     }
   }
 }
-
 
 /**
  * This object wouldn't exist, except that scala closures pass in the this pointer
@@ -370,4 +459,45 @@ private[smr] object InternalIterable {
     val b = handleGather[T,Iterable[T],Option[B]](self,doMapReduce);
     b.filter(None!=).map{ (x : (Int,Option[B])) => x._2.get}.reduceLeft(r);
   }
+
+  private def handleGroupBy[T,U](self : InternalIterable[T], group : T=>U) = {
+    val innerGroupBy = { (it : Iterable[T],out : (Int,(U,T)) =>Unit) =>
+      for(x <- it) {
+        val ARBITRARY_PRIME=47;
+        val u = group(x);
+        out(u.hashCode+ARBITRARY_PRIME,(u,x));
+      }
+    }
+
+    val receiver = { (it: Iterator[(U,T)]) => 
+      val map = scala.collection.mutable.Map[U,ArrayBuffer[T]]();
+      for( (u,t) <- it) {
+        map.getOrElseUpdate(u,new ArrayBuffer[T]) += t;
+      }
+      map.toSeq;
+    }
+    new InternalIterable[(U,Seq[T])] {
+      protected val scheduler = self.scheduler;
+      protected val id = scheduler.groupBy(self.id,innerGroupBy, receiver);
+    }
+  }
+
+  private def handleDistinct[T](self : InternalIterable[T]) = {
+    val innerGroupBy = { (it : Iterable[T],out : (Int,T) =>Unit) =>
+      for(x <- it) {
+        val ARBITRARY_PRIME=47;
+        out(x.hashCode+ARBITRARY_PRIME,x);
+      }
+    }
+
+    val receiver = { (it: Iterator[T]) => 
+      val set = scala.collection.mutable.Set[T]() ++ it;
+      set.toSeq;
+    }
+    new InternalIterable[T] {
+      protected val scheduler = self.scheduler;
+      protected val id = scheduler.groupBy(self.id,innerGroupBy, receiver);
+    }
+  }
+
 }

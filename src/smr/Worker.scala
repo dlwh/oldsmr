@@ -65,6 +65,34 @@ class Worker(port : Int, sym : Symbol) extends Actor {
               outAcc.completeShard(shard,outData);
             }
           }
+        case InPlaceDo(in,f) =>
+        getAcc(in).addShardListener { case (s,data) =>
+          actual_worker enqueue { _ =>
+            f(data);
+          }
+        }
+        case GetOutputActor(isLocal, out, shard, retr) => 
+        def getOutputActor[U,V](retr : Iterator[U]=>V) {
+          val actorIterator = new Util.ActorIterator[U];
+          val a = Actor.actor {
+            getAcc(out).completeShard(shard,retr(actorIterator));
+          }
+          getAcc(out).reserveShard(shard);
+          val actor = transActor(port,Symbol(":output-" + out + "-"+shard)) {
+            Actor.loop {
+              Actor.react {
+                case msg@ Some(x) => actorIterator.receiver ! msg; 
+                case None => actorIterator.receiver ! None; exit();
+              }
+            }
+          }
+          if(isLocal) {
+            reply { (Some(actor),TransActorToSerializedActor(actor))}
+          } else {
+            reply { (None,TransActorToSerializedActor(actor))}
+          }
+        }
+        getOutputActor(retr);
         case Done(id,s,r)=>getAcc(id).completeShard(s,r);
         case Reserve(id,shard) => getAcc(id).reserveShard(shard);
         case DoneAdding(id) => getAcc(id).doneReserving();
@@ -171,7 +199,7 @@ object Worker {
             waitingForDoneReservation.clear();
             checkFinished();
 
-          case Done(_,s,r) => 
+          case Done(i,s,r) => 
             active -= s; 
             done += (s->r);
             checkFinished();

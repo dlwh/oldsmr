@@ -22,7 +22,7 @@
 * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 package smr;
-import scala.collection.mutable.ArrayBuffer;
+import scala.collection.mutable._;
 
 /**
  * Object to hold various sensible Defaults for SMR. Expected use:
@@ -62,6 +62,15 @@ object Defaults extends SerializedImplicits {
     override def map[U](f : T=>U)  = fakeDistributedIterable(it.map(f));
     override def flatMap[U](f : T=>Iterable[U]) = fakeDistributedIterable(it.flatMap(f));
     override def reduce[U>:T](f : (U,U)=>U)  = it.reduceLeft(f);
+    override def groupBy[U](grp : T=>U) = {
+      val map = Map[U,ArrayBuffer[T]]();
+      for( t <- elements) {
+       map.getOrElseUpdate(grp(t),new ArrayBuffer[T]) += t; 
+      }
+      fakeDistributedIterable(map.asInstanceOf[Map[U,Iterable[T]]].toList);
+    }
+    override def distinct() = (Set() ++ elements).toSeq
+
     def elements = it.elements;
   }
 

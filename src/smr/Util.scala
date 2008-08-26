@@ -22,6 +22,8 @@
 * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 package smr;
+import scala.actors.Actor._;
+import scala.actors.Actor;
 
 object Util {
   def identity[T] = new SerFunction1[T,T] {
@@ -49,4 +51,34 @@ object Util {
     server.close();
     return port;
   }
+
+  /**
+  * Iterator that reacts to get the next element.
+  * Used internally to
+  */
+  class ActorIterator[T] extends Iterator[T] {
+    def hasNext() = !nulled && (cache match {
+      case Some(x) => true;
+      case _ =>
+      (receiver !? Poll) match {
+        case None => nulled = true; receiver ! Close; false;
+        case opt @ Some(x) => cache = opt.asInstanceOf[Option[T]]; true;
+      }
+    })
+    def next() = {hasNext(); val x = cache.get; cache = None; x}
+
+    val receiver = actor {
+      loop {
+        react {
+          case Poll => reply {Actor.?}
+          case Close => exit();
+        }
+      }
+    }
+    private var nulled = false;
+    private var cache : Option[T] = None;
+    private case class Poll;
+    private case class Close;
+  }
+
 }
