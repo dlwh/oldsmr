@@ -60,14 +60,14 @@ class Worker(port : Int, sym : Symbol) extends Actor {
           val outAcc = getAcc(out);
           getAcc(in).forwardShardNums(outAcc);
           getAcc(in).addShardListener {  case (shard,data) =>
-            actual_worker.enqueue { _ =>
+            actual_worker.enqueue { x:Unit =>
               val outData = f(data);
               outAcc.completeShard(shard,outData);
             }
           }
         case InPlaceDo(in,f) =>
         getAcc(in).addShardListener { case (s,data) =>
-          actual_worker enqueue { _ =>
+          actual_worker enqueue { x:Unit =>
             f(data);
           }
         }
@@ -104,7 +104,7 @@ class Worker(port : Int, sym : Symbol) extends Actor {
           //Debug.info(rtr + "");
           // Push it off to the accumulator, have it forward things to the job runner
           getAcc(id).addShardListener{ case (shard,data) =>
-            actual_worker.enqueue { _ =>
+            actual_worker.enqueue { x :Unit =>
               realActor ! Retrieved(out,shard,f(data));
             }
           }
@@ -179,7 +179,7 @@ object Worker {
             }
             shouldExit = true;
           case Forward(out) =>
-            val f = { _: Unit => 
+            val f = { x: Unit => 
               active.foreach { sh =>  out.reserveShard(sh)}
               done.keys.foreach { sh =>  out.reserveShard(sh)}
               out.doneReserving();

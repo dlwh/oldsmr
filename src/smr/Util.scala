@@ -32,6 +32,7 @@ object Util {
   def fMap[T,U](f : T=>U) = new SerFunction1[Iterable[T],Iterable[U]] {
     def apply(x : Iterable[T]) = x.map(f);
   };
+
   def fFlatMap[T,U](f : T=>Iterable[U])  = new SerFunction1[Iterable[T],Iterable[U]] {
     def apply(x : Iterable[T]) = x.flatMap(f);
   };
@@ -79,6 +80,26 @@ object Util {
     private var cache : Option[T] = None;
     private case class Poll;
     private case class Close;
+  }
+
+  def iteratorFromProducer[T](p : ()=>Option[T]) = new Iterator[T] {
+    private var nxt : Option[T] = None;
+    private var hasN = true;
+
+    private def readNext() = p() match {
+      case o @ Some(t) => nxt = o;
+      case None=>nxt=None; hasN = false;
+    }
+
+    def hasNext = hasN && (nxt match {
+      case Some(t) => true;
+      case None => readNext(); hasN;
+    })
+
+    def next : T = nxt match {
+      case Some(t) => nxt=None; t;
+      case None=> readNext(); if(hasN) next else throw new NoSuchElementException();
+    }
   }
 
 }

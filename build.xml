@@ -11,6 +11,9 @@
       <include name="*.jar"/>
     </fileset>
     <pathelement location="${build.dir}"/>
+    <fileset dir="${env.HADOOP_HOME}">
+      <include name="*.jar"/>
+    </fileset>
   </path>
 
   <!-- 4. Define scala compiler command. -->
@@ -21,7 +24,10 @@
   <target name="compile">
     <mkdir dir="${build.dir}"/>
 
-    <scalac srcdir="${src.dir}" destdir="${build.dir}" classpathref="project.classpath" force="changed">
+    <scalac srcdir="${src.dir}" destdir="${build.dir}"
+      classpathref="project.classpath" force="changed"
+      deprecation="yes" unchecked="yes" 
+    >
       <include name="**/*.scala"/>
     </scalac>
   </target>

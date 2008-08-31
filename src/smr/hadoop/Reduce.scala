@@ -21,18 +21,21 @@
 * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-package smr;
+package smr.hadoop;
+import smr._;
 
+import org.apache.hadoop.io._;
+import org.apache.hadoop.conf._;
+import org.apache.hadoop.fs._;
+import org.apache.hadoop.util._;
 
-@serializable trait SerFunction0[+B] extends Function0[B];
-@serializable trait SerFunction1[-A,+B] extends Function1[A,B] { outer =>
-  override def andThen[C](f : B=>C) = new SerFunction1[A,C] {
-    def apply(a : A) = f(outer.apply(a));
+@serializable
+trait Reduce[-K1,-V1,+K2,+V2] {
+  def reduce(key : K1, it: Iterator[V1]): Iterator[(K2,V2)];
+}
+
+class RealReduce[T](f : (T,T)=>T) extends Reduce[Any,T,Any,T] { 
+  override def reduce(k: Any, it :Iterator[T]) : Iterator[(Any,T)] = {
+    Iterator.single((k,it.reduceLeft(f)));
   }
 }
-@serializable trait SerFunction2[-A,-B,+C] extends Function2[A,B,C];
-@serializable trait SerFunction3[-A,-B,-C,+D] extends Function3[A,B,C,D];
-
-
-// please Ant
-private object SerFunction;

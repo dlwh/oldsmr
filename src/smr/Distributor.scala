@@ -122,60 +122,6 @@ object Debug extends scala.actors.Debug("smr:: ") {
   level = 4;
 }
 
-trait DistributedIterable[+T] extends Iterable[T] {
-  override def map[B](f : T=>B) : DistributedIterable[B] = null;
-  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = null;
-  override def filter(f : T=>Boolean) : DistributedIterable[T] = null;
-  /**
-   * Sadly, both versions of reduce in the Scala libs are not fully associative,
-   * which is required for a parallel reduce. This version of reduce demands 
-   * that the operators are associative.
-   */
-  def reduce[B >: T](f : (B,B)=>B) : B;
-
-  /**
-   * Can do a map and a reduce in a single step. Useful for large data sets.
-   */
-  def mapReduce[U,R>:U](m : T=>U)(r : (R,R)=>R) : R = this.map(m).reduce(r);
-
-  /**
-  * for each element, reshard the data by group(t)'s hashcode and create a new 
-  * Iterable with those elements.
-  */
-  def groupBy[U](group : T=>U) : DistributedIterable[(U,Iterable[T])];
-
-  /**
-  * Removes all copies of the elements.
-  */
-  def distinct() : DistributedIterable[T];
-
-  /**
-   * Returns a "lazy" DistributedIterable that does not invoke the supplied 
-   * operation until another non-lazy operation is applied.
-   * Because this whole library is designed for large memory tasks,
-   * using a lazyMap is occasionally useful.
-   * 
-   * A lazyMap followed by a reduce is the same as a mapReduce.
-   *
-   */
-  def lazyMap[U](f : T=>U) :DistributedIterable[U] ={
-    val parent = this;
-    new DistributedIterable[U] {
-      def elements = parent.elements.map(f);
-      override def map[C](g : U=>C) = parent.map(Util.andThen(f,g));
-      override def flatMap[C](g: U=>Iterable[C]) = parent.flatMap(Util.andThen(f,g));
-      override def filter(g: U=>Boolean) = parent.map(f).filter(g);
-      override def reduce[C >:U](g : (C,C) =>C) : C= parent.mapReduce[U,C](f)(g)
-      override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](Util.andThen(f,m))(r);
-      override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(Util.andThen(f,g));
-      // TODO: better partition
-      override def groupBy[V]( grp : U=>V) = parent.map(f).groupBy(grp);
-      override def distinct() = parent.map(f).distinct;
-    }
-  }
-}
-
-
 /**
  * Class most users will use. Example use:
  * <pre>
@@ -334,9 +280,12 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
           workers.foreach{ a => a._2 ! Retrieve(in,f.asInstanceOf[Any=>Any],out,if(a._1) Left(localAccumulator) else Right(remoteAccumulator))}
         case AddWorker(a)=> 
           Debug.info("Added a worker.");
-          workers += (false,a); // TODO:improve 
+          workers += new Tuple2(false,a); // TODO:improve 
         
-        case Remove(id) => Debug.info("Master removing job " + id); workers.foreach{ _._2 ! Remove(id)}
+        case Remove(id) =>
+          Debug.info("Master removing job " + id);
+          workers.foreach{ _._2 ! Remove(id)};
+          numShards -= id;
       }
     }
   }
@@ -360,7 +309,7 @@ class ActorDistributor(numWorkers : Int, port : Int) extends Distributor {
   // boolean says i'm local and don't need to serialize things
   private val workers =  new ArrayBuffer[(Boolean,OutputChannel[Any])];
   for (val i <- List.range(0,numWorkers))
-    workers += (true,Worker());
+    workers += new Tuple2(true,Worker());
 }
 
 private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
