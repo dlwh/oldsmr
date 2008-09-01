@@ -33,6 +33,8 @@ import org.apache.hadoop.util._;
 import org.apache.hadoop.mapred._;
 import org.apache.hadoop.filecache._;
 
+import scala.reflect.Manifest;
+
 
 /**
  * Supports Hadoop operations.
@@ -52,14 +54,13 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
 
   private[smr] val cacheDir = dirGenerator("cache");
 
-  println(cacheDir);
   conf.set("smr.cache.dir",cacheDir.toString);
   cacheDir.mkdirs();
 
-  def load[T](p : Array[Path])= new PathIterable(this,p);
-  def load[T](p : Path):PathIterable[T]= load[T](Array(p));
+  def load[T](p : Array[Path])(implicit m : Manifest[T])= new PathIterable[T](this,p);
+  def load[T](p : Path)(implicit m : Manifest[T]):PathIterable[T]= load[T](Array(p));
 
-  def distribute[T](ibl : Iterable[T], numShards :Int)  = {
+  def distribute[T](ibl : Iterable[T], numShards :Int)(implicit m : Manifest[T]) :PathIterable[T] = {
     val paths = pathGenerator(numShards);
 
     val elems = ibl.elements.map(Magic.realToWire);
@@ -82,7 +83,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
       writers(i%numShards).append(fakeKey,nxt);
     }
     writers.foreach{_.close()};
-    load(paths);
+    load[T](paths);
   }
 
   private def serializeClass(jobConf : JobConf, name : String, c : AnyRef) = {
@@ -90,7 +91,6 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     val path = new Path(cacheDir,name);
     val stream = new ObjectOutputStream(path.getFileSystem(jc).create(path));
     stream.writeObject(c);
-    println("Foo");
     stream.close();
     DistributedCache.addCacheFile(path.toUri,jobConf);
     path;
@@ -98,7 +98,9 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
 
   private[hadoop] def runMapReduce[K1,V1,K2,V2,K3,V3](paths : Array[Path],
     m: Mapper[K1,V1,K2,V2],
-    r: Reduce[K2,V2,K3,V3]) = {
+    r: Reduce[K2,V2,K3,V3])
+   (implicit mk2:Manifest[K2], mv2:Manifest[V2],
+             mk3:Manifest[K3], mv3:Manifest[V3]) = {
     implicit val jobConf = new JobConf(conf, m.getFunClass); 
 
     val outputPath = genDir;
@@ -112,6 +114,16 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
 
     jobConf.setMapRunnerClass(classOf[ClosureMapper[_,_,_,_]]);
     jobConf.setReducerClass(classOf[ReduceWrapper[_,_,_,_]]);
+    
+    println(mk2.erasure);
+    println(mv2.erasure);
+    println(mk3.erasure);
+    println(mv3.erasure);
+
+    jobConf.setMapOutputKeyClass(Magic.classToWritableClass(mk2.erasure));
+    jobConf.setMapOutputValueClass(Magic.classToWritableClass(mv2.erasure));
+    jobConf.setOutputKeyClass(Magic.classToWritableClass(mk3.erasure));
+    jobConf.setOutputValueClass(Magic.classToWritableClass(mv3.erasure));
 
     jobConf.setInputFormat(classOf[SequenceFileInputFormat[_,_]])
     jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]])
@@ -176,44 +188,3 @@ object Hadoop {
 }
 
 
-// You know it's bad when you have a class called magic
-object Magic {
-  def wireToReal(t : Writable) :Any = t match {
-    case t :Text => t.toString.asInstanceOf;
-    case arr : ArrayWritable => arr.get().map(wireToReal);
-    case t => try {
-      t.asInstanceOf[{def get():Any;}].get();
-    } catch {
-      case e => t;
-    }
-  }
-
-  implicit def realToWire(t : Any):Writable = t match {
-    case t : Writable => t;
-    case t : Int => new IntWritable(t);
-    case t : Long => new LongWritable(t);
-    case t : Float => new FloatWritable(t);
-    case t : Double => new DoubleWritable(t);
-    case t : Boolean => new BooleanWritable(t);
-    case t : String => new Text(t);
-    case t : Array[Byte] => new BytesWritable(t);
-    case x : AnyRef if x.getClass.isArray => { 
-      val t = x.asInstanceOf[Array[Any]];
-      if(t.length == 0) new ObjectWritable(t);
-      else { 
-        val mapped = t.map(realToWire); 
-        val classes = mapped.map(_.getClass);
-        if(classes.forall(classes(0)==_)) { 
-          // can only use ArrayWritable if all Writables are the same.
-          new ArrayWritable(classes(0),mapped);
-        } else {
-          // fall back on ObjectWritable
-          val mapped = t.map(new ObjectWritable(_).asInstanceOf[Writable]); 
-          new ArrayWritable(classOf[ObjectWritable],mapped);
-        }
-      }
-    }
-    case _ => new ObjectWritable(t);
-  }
-
-}

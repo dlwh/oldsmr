@@ -45,6 +45,8 @@ private class ReduceWrapper[K1,V1,K2,V2] extends Reducer[Writable,Writable,Writa
     inputStream.close();
   }
 
+  private def xClass(x : Any) = x.asInstanceOf[AnyRef].getClass
+
   override def reduce(k : Writable,
     it: java.util.Iterator[Writable],
     output : OutputCollector[Writable,Writable],

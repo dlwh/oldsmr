@@ -27,8 +27,9 @@ import org.apache.hadoop.io._;
 import org.apache.hadoop.conf._;
 import org.apache.hadoop.fs._;
 import org.apache.hadoop.util._;
+import scala.reflect.Manifest;
 
-class PathIterable[+T](h : Hadoop, val paths : Array[Path]) extends Iterable[T] {
+class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]) extends Iterable[T] {
   def elements = {
     if(paths.length == 0) 
       new Iterator[T] { 
@@ -67,8 +68,8 @@ class PathIterable[+T](h : Hadoop, val paths : Array[Path]) extends Iterable[T] 
 
   import PathIterable._;
   import Hadoop._;
-  def reduce[T](f: (T,T)=>T) : T = { 
-    val output = h.runMapReduce(paths, new CollectorMapper[T,T](reduceFun[T](f)), new RealReduce(f));
+  def reduce(f: (T,T)=>T) : T = { 
+    val output = h.runMapReduce(paths, new CollectorMapper(reduceFun(f)), new RealReduce(f));
     val path = output(0);
 
     val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);

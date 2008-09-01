@@ -25,11 +25,11 @@
     <mkdir dir="${build.dir}"/>
 
     <!--
-      addparams="-Xplugin:jars/seroverride.jar -Xshow-phases"
       -->
     <scalac srcdir="${src.dir}" destdir="${build.dir}"
       classpathref="project.classpath" force="changed"
       deprecation="yes" unchecked="yes" 
+      addparams="-Xplugin:jars/seroverride.jar -Xshow-phases"
     >
       <include name="**/*.scala"/>
     </scalac>

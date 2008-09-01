@@ -26,15 +26,10 @@ class SerOverride(val global: Global) extends Plugin {
       case cdef@ ClassDef(mods,name,tparams,impl) =>
         val sym = cdef.symbol 
         val serType = definitions.SerializableAttr.tpe
-        println("fire " + cdef.symbol)
         if( sym.hasFlag(SYNTHETIC) && sym.name.toString.contains("anonfun") && !sym.attributes.exists(serType==_.atp)) {
-          println(sym,sym.getClass);
-          println(cdef);
           sym.attributes= AnnotationInfo(serType, List(), List()) :: sym.attributes 
-         println( copy.ClassDef(t, mods, name, transformTypeDefs(tparams), transformTemplate(impl)) );
           copy.ClassDef(t, mods, name, transformTypeDefs(tparams), transformTemplate(impl)) ;
         } else {
-          println(super.transform(t));
           super.transform(t);
         }
       case _ => super.transform(t);

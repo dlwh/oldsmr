@@ -34,8 +34,9 @@ trait Reduce[-K1,-V1,+K2,+V2] {
   def reduce(key : K1, it: Iterator[V1]): Iterator[(K2,V2)];
 }
 
-class RealReduce[T](f : (T,T)=>T) extends Reduce[Any,T,Any,T] { 
-  override def reduce(k: Any, it :Iterator[T]) : Iterator[(Any,T)] = {
+import Hadoop._;
+class RealReduce[T](f : (T,T)=>T) extends Reduce[DefaultKey,T,DefaultKey,T] { 
+  override def reduce(k: DefaultKey, it :Iterator[T]) : Iterator[(DefaultKey,T)] = {
     Iterator.single((k,it.reduceLeft(f)));
   }
 }
