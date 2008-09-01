@@ -90,6 +90,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     val path = new Path(cacheDir,name);
     val stream = new ObjectOutputStream(path.getFileSystem(jc).create(path));
     stream.writeObject(c);
+    println("Foo");
     stream.close();
     DistributedCache.addCacheFile(path.toUri,jobConf);
     path;
@@ -115,7 +116,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     jobConf.setInputFormat(classOf[SequenceFileInputFormat[_,_]])
     jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]])
 
-    FileInputFormat.setInputPaths(jobConf, paths);
+    FileInputFormat.setInputPaths(jobConf, paths:_*);
     FileOutputFormat.setOutputPath(jobConf,outputPath);
 
     JobClient.runJob(jobConf);
@@ -170,8 +171,8 @@ object Hadoop {
 
 
 
-  private[hadoop] type DefaultKeyWritable = BooleanWritable;
-  private[hadoop] type DefaultKey= Boolean;
+  private[hadoop] type DefaultKeyWritable = LongWritable;
+  private[hadoop] type DefaultKey= Long;
 }
 
 

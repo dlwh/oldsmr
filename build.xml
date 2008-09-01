@@ -21,9 +21,12 @@
   <taskdef resource="scala/tools/ant/antlib.xml"/>
   <!-- 5. Compiles sources by using "scalac" command. -->
 
-  <target name="compile">
+  <target name="compile" depends="plugin">
     <mkdir dir="${build.dir}"/>
 
+    <!--
+      addparams="-Xplugin:jars/seroverride.jar -Xshow-phases"
+      -->
     <scalac srcdir="${src.dir}" destdir="${build.dir}"
       classpathref="project.classpath" force="changed"
       deprecation="yes" unchecked="yes" 
@@ -43,7 +46,14 @@
     </scaladoc>
   </target>
 
-  <target name="plugin" depends="compile"> 
+  <target name="plugin">
+    <mkdir dir="${build.dir}"/>
+    <scalac srcdir="${src.dir}" destdir="${build.dir}"
+      classpathref="project.classpath" force="changed"
+      deprecation="yes" unchecked="yes" 
+    >
+      <include name="**/plugin/*.scala"/>
+    </scalac>
     <mkdir dir="jars"/>
     <jar destfile="jars/seroverride.jar">
       <fileset dir="classes/"
