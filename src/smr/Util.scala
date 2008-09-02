@@ -41,6 +41,18 @@ object Util {
     def apply(x : Iterable[T]) = x.filter(f);
   };
 
+  def itMap[T,U](f : T=>U) = new SerFunction1[Iterator[T],Iterator[U]] {
+    def apply(x : Iterator[T]) = x.map(f);
+  };
+
+  def itFlatMap[T,U](f : T=>Iterable[U])  = new SerFunction1[Iterator[T],Iterator[U]] {
+    def apply(it : Iterator[T]) = for(x <- it; y <- f(x).elements) yield y;
+  };
+
+  def itFilter[T](f : T=>Boolean) = new SerFunction1[Iterator[T],Iterator[T]] { 
+    def apply(x : Iterator[T]) = x.filter(f);
+  };
+
   // g(f(x))
   def andThen[A,B,C](f: A=>B, g:B=>C) = new SerFunction1[A,C] {
    def apply(a : A) = g(f(a));

@@ -51,6 +51,7 @@ private object Magic {
     case t : Writable => t;
     case t : Int => new IntWritable(t);
     case t : Long => new LongWritable(t);
+    case t : Byte => new ByteWritable(t);
     case t : Float => new FloatWritable(t);
     case t : Double => new DoubleWritable(t);
     case t : Boolean => new BooleanWritable(t);
@@ -77,6 +78,7 @@ private object Magic {
 
   private val CInt = classOf[Int];
   private val CLong = classOf[Long];
+  private val CByte = classOf[Byte];
   private val CDouble = classOf[Double];
   private val CFloat = classOf[Float];
   private val CBoolean = classOf[Boolean];
@@ -94,6 +96,7 @@ private object Magic {
     case c if mkManifest(c) <:< CWritable => c.asInstanceOf[Class[Writable]];
     case CInt => classOf[IntWritable].asInstanceOf[Class[Writable]];
     case CLong => classOf[LongWritable].asInstanceOf[Class[Writable]];
+    case CByte => classOf[ByteWritable].asInstanceOf[Class[Writable]];
     case CDouble => classOf[DoubleWritable].asInstanceOf[Class[Writable]];
     case CFloat => classOf[FloatWritable].asInstanceOf[Class[Writable]];
     case CBoolean => classOf[BooleanWritable].asInstanceOf[Class[Writable]];

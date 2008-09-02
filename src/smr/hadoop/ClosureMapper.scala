@@ -38,8 +38,6 @@ class ClosureMapper[K1,V1,K2,V2] extends MapRunnable[Writable,Writable,Writable,
   override def configure(conf : JobConf) {
     val mapString = conf.get("smr.job.mapper.file");
     val localFiles = DistributedCache.getCacheFiles(conf);
-    println(localFiles);
-    println(localFiles.mkString(","));
     val mapFile = new Path(localFiles.filter(_.toString==mapString)(0).toString);
     val inputStream = new java.io.ObjectInputStream(mapFile.getFileSystem(conf).open(mapFile));
     m = inputStream.readObject().asInstanceOf[Mapper[K1,V1,K2,V2]];

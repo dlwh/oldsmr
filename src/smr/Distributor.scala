@@ -30,6 +30,7 @@ import scala.collection.mutable.ArrayBuffer;
 import scala.collection._;
 import scala.actors.remote.RemoteActor._;
 import scala.actors.remote._;
+import scala.reflect.Manifest;
 import smr.TransActor._;
 
 object Distributor {
@@ -322,13 +323,16 @@ private[smr] trait InternalIterable[T] extends DistributedIterable[T] {
     list.sort(_._1 < _._1).map(_._2.projection).reduceLeft(_ append _).elements
   }
 
-  override def map[U](f : T=>U) : DistributedIterable[U] = handleMap(this,f);
-  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = handleFlatMap(this,f);
-  override def filter(f : T=>Boolean) : DistributedIterable[T] = handleFilter(this,f);
-  override def reduce[B >: T](f : (B,B)=>B) : B = handleReduce(this,f)
-  override def mapReduce[U,B >: U](m : T=>U)(r : (B,B)=>B) : B = handleMapReduce(this,m,r);
-  override def groupBy[U](group: T=>U):DistributedIterable[(U,Seq[T])] = handleGroupBy(this,group);
-  override def distinct() = handleDistinct(this);
+  def map[U](f : T=>U)(implicit mU : Manifest[U]) : DistributedIterable[U] = handleMap(this,f);
+  def flatMap[U](f : T=>Iterable[U]) (implicit mU : Manifest[U]): DistributedIterable[U] = handleFlatMap(this,f);
+  def filter(f : T=>Boolean) : DistributedIterable[T] = handleFilter(this,f);
+  def reduce[B >: T](f : (B,B)=>B) : B = handleReduce(this,f)
+  override def mapReduce[U,B >: U](m : T=>U)(r : (B,B)=>B)(implicit mU:Manifest[U]) = {
+    handleMapReduce(this,m,r);
+  }
+  def groupBy[U](group: T=>U):DistributedIterable[(U,Seq[T])] = handleGroupBy(this,group);
+  def distinct() = handleDistinct(this);
+  def force = this;
 
   override protected def finalize() {
     try {

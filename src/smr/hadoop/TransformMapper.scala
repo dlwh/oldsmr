@@ -30,13 +30,12 @@ import org.apache.hadoop.util._;
 
 import Hadoop.DefaultKey;
 /**
- * Mapper than ensures all output values goes to the same Reducer by using a default key;.
- * Ignores input key.
+ * A fairly default mapper that only modifies values.
+ * Ignores input key, and uses the default key for output.
  */
-class CollectorMapper[T,U](f:Iterator[T]=>Iterator[U]) extends Mapper[Any,T,DefaultKey,U] {
+class TransformMapper[T,U](f:Iterator[T]=>Iterator[U]) extends Mapper[Any,T,DefaultKey,U] {
   override def map(it : Iterator[(Any,T)]):Iterator[(DefaultKey,U)] = {
-    val w = Hadoop.mkDefaultKey();
-    f(it.map(_._2)).map( (w,_));
+    f(it.map(_._2)).map( x => (Hadoop.mkDefaultKey(x),x));
   }
 
   override def getFunClass = f.getClass;

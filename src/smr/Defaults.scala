@@ -23,6 +23,7 @@
 */
 package smr;
 import scala.collection.mutable._;
+import scala.reflect.Manifest;
 
 /**
  * Object to hold various sensible Defaults for SMR. Expected use:
@@ -59,10 +60,11 @@ object Defaults extends SerializedImplicits {
     arrs.toList
   }
   implicit def fakeDistributedIterable[T](it : Iterable[T]):DistributedIterable[T] = new DistributedIterable[T] {
-    override def map[U](f : T=>U)  = fakeDistributedIterable(it.map(f));
-    override def flatMap[U](f : T=>Iterable[U]) = fakeDistributedIterable(it.flatMap(f));
+    override def map[U](f : T=>U)(implicit mU : Manifest[U]) = fakeDistributedIterable(it.map(f));
+    override def flatMap[U](f : T=>Iterable[U])(implicit mU : Manifest[U])= fakeDistributedIterable(it.flatMap(f));
+    override def filter(f : T=>Boolean) = fakeDistributedIterable(it.filter(f));
     override def reduce[U>:T](f : (U,U)=>U)  = it.reduceLeft(f);
-    override def groupBy[U](grp : T=>U) = {
+    def groupBy[U](grp : T=>U) = {
       val map = Map[U,ArrayBuffer[T]]();
       for( t <- elements) {
        map.getOrElseUpdate(grp(t),new ArrayBuffer[T]) += t; 

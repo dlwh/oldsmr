@@ -29,7 +29,12 @@ import org.apache.hadoop.fs._;
 import org.apache.hadoop.util._;
 import scala.reflect.Manifest;
 
-class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]) extends Iterable[T] {
+/**
+ * Represents SequenceFiles of (Hadoop.DefaultKey,T) pairs on disk. 
+ * All operations are scheduled as MapReduces using Hadoop.runMapReduce.
+ * The DefaultKey is inaccessible.
+ */
+class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]) extends DistributedIterable[T] {
   def elements = {
     if(paths.length == 0) 
       new Iterator[T] { 
@@ -38,37 +43,24 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
       }
     else (for(p <- paths;
             rdr = new SequenceFile.Reader(p.getFileSystem(h.conf),p,h.conf);
+            keyType = rdr.getKeyClass().asSubclass(classOf[Writable]);
             valType = rdr.getValueClass().asSubclass(classOf[Writable]))
-      yield new Iterator[T] {
-        private var hasN = true;
-        private var v : Option[Writable] = None;
-        private def readNext() {
-          val realV = valType.newInstance();
-          val k = new Hadoop.DefaultKeyWritable;
-          try {
-            hasN = rdr.next(k,realV);
-            if(!hasN) rdr.close();
-            else v = Some(realV);
-          } catch {
-            case e => rdr.close();
-          }
-        }
-
-        def hasNext() = v match {
-          case None => readNext(); hasN
-          case Some(v) => true;
-        }
-        def next() = {
-          val nx = Magic.wireToReal(v.get).asInstanceOf[T];
-          v = None;
-          nx;
-        }
-      }.asInstanceOf[Iterator[T]]).reduceLeft(_++_);
+          yield Util.iteratorFromProducer {() => 
+            val k = keyType.newInstance();
+            val v = valType.newInstance();
+            rdr.next(k,v) match {
+              case true => Some(Magic.wireToReal(v).asInstanceOf[T]);
+              case false=> rdr.close(); None;
+            }
+          }).reduceLeft(_++_);
   }
+
+  def force = this;
 
   import PathIterable._;
   import Hadoop._;
-  def reduce(f: (T,T)=>T) : T = { 
+  def reduce[B>:T](f: (B,B)=>B) : B = { 
+    implicit val b = m.asInstanceOf[Manifest[B]];
     val output = h.runMapReduce(paths, new CollectorMapper(reduceFun(f)), new RealReduce(f));
     val path = output(0);
 
@@ -77,12 +69,99 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
     val k = result.getKeyClass.asSubclass(classOf[Writable]).newInstance();
     result.next(k,v);
     result.close();
-    Magic.wireToReal(v).asInstanceOf[T];
+    Magic.wireToReal(v).asInstanceOf[B];
   }
 
- // override def map[U](f : T=>U) : Iterable[U] = new ProjectedIterable[U](this,Util.fMap(f));
- // override def flatMap[U](f : T=>Iterable[U]) : Iterable[U] = new ProjectedIterable[U](this,Util.fFlatMap(f));
- // override def filter[U](f : T=>Boolean) : Iterable[T] = new ProjectedIterable[U](this,Util.fFilter(f));
+  /**
+   * Equivalent to Set() ++ it.elements, but distributed.
+   */
+  def distinct() = { 
+    val output = h.runMapReduce(paths,new SwapMapper[DefaultKey,T],new KeyToValReduce[T,DefaultKey]);
+    new PathIterable(h,output);
+  }
+
+ /**
+  * Lazy
+  */
+ override def map[U](f : T=>U)(implicit m : Manifest[U]): DistributedIterable[U] = new ProjectedIterable[U](Util.itMap(f));
+ /**
+  * Lazy
+  */
+ override def flatMap[U](f : T=>Iterable[U]) (implicit m : Manifest[U]): DistributedIterable[U] = new ProjectedIterable[U](Util.itFlatMap(f));
+ /**
+  * Lazy
+  */
+ override def filter(f : T=>Boolean) : DistributedIterable[T] = new ProjectedIterable(Util.itFilter[T](f));
+
+ /**
+  * Represents a transformation on the data.
+  * Caches transform when "force" or "elements" is called.
+  */
+ private class ProjectedIterable[U](transform:Iterator[T]=>Iterator[U])(implicit mU: Manifest[U]) extends DistributedIterable[U] {
+    def elements = force.elements;
+
+    // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
+    // seems reasonable.
+    def force(): DistributedIterable[U] = synchronized {
+      cache match {
+        case Some(output)=> (new PathIterable(h,output)(mU))
+        case None =>
+        val output = h.runMapReduce(paths,
+                                    new TransformMapper(transform),
+                                    new IdentityReduce[DefaultKey,U]());
+        cache = Some(output);
+        (new PathIterable(h,output)(mU))
+      }
+    }
+
+    /// So we don't repeat a computation unncessarily
+    private var _cache : Option[Array[Path]] = None;
+
+    // must be synchronized
+    private def cache = synchronized { _cache };
+    private def cache_=(c : Option[Array[Path]]) = c;
+
+    override def map[V](f : U=>V)(implicit m: Manifest[V]): DistributedIterable[V] = cache match {
+      case Some(path) => new PathIterable[U](h,path).map(f);
+      case None => new ProjectedIterable[V](Util.andThen(transform, Util.itMap(f)));
+    }
+
+    override def flatMap[V](f : U=>Iterable[V])(implicit m: Manifest[V]) : DistributedIterable[V] = cache match {
+      case Some(path) => new PathIterable[U](h,path).flatMap(f);
+      case _ => new ProjectedIterable[V](Util.andThen(transform,Util.itFlatMap(f)));
+    }
+
+    override def filter(f : U=>Boolean) : DistributedIterable[U] = cache match {
+      case Some(path) => new PathIterable[U](h,path).filter(f);
+      case None => new ProjectedIterable[U](Util.andThen(transform,Util.itFilter(f)));
+    }
+
+    def distinct() = cache match { 
+      case Some(path) => new PathIterable[U](h,path).distinct();
+      case None =>
+      val output = h.runMapReduce(paths,
+                                  new TransformValMapper[DefaultKey,T,U](transform),
+                                  new KeyToValReduce[U,DefaultKey]);
+      new PathIterable(h,output);
+    }
+
+    def reduce[B>:U](f: (B,B)=>B) : B = cache match { 
+      case Some(path) => new PathIterable[U](h,path).reduce(f);
+      case None =>
+      implicit val b = m.asInstanceOf[Manifest[B]];
+      val output = h.runMapReduce(paths,
+                                  new CollectorMapper(Util.andThen(transform,reduceFun(f))),
+                                  new RealReduce(f));
+      val path = output(0);
+
+      val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);
+      val v = result.getValueClass.asSubclass(classOf[Writable]).newInstance();
+      val k = result.getKeyClass.asSubclass(classOf[Writable]).newInstance();
+      result.next(k,v);
+      result.close();
+      Magic.wireToReal(v).asInstanceOf[B];
+    }
+  }
 }
 
 private[smr] object PathIterable {

@@ -44,6 +44,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
   // enable path conversions, and other goodies
   implicit private val cf = conf;
   import Implicits._;
+  import Hadoop._;
 
   /**
    * Constructs a Hadoop instance with the given configuration and working directory (for files)
@@ -74,13 +75,12 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
         fs = p.getFileSystem(conf);
         wrtr = new SequenceFile.Writer(fs,conf,p,classOf[Hadoop.DefaultKeyWritable],first.getClass)) 
       yield wrtr;
-    val fakeKey = new Hadoop.DefaultKeyWritable();
     var i = 0;
-    writers(i%numShards).append(fakeKey,first);
+    writers(i%numShards).append(Magic.realToWire(mkDefaultKey(first)),first);
     while(elems.hasNext) {
       i+=1;
       val nxt = elems.next();
-      writers(i%numShards).append(fakeKey,nxt);
+      writers(i%numShards).append(Magic.realToWire(mkDefaultKey(nxt)),nxt);
     }
     writers.foreach{_.close()};
     load[T](paths);
@@ -115,11 +115,6 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     jobConf.setMapRunnerClass(classOf[ClosureMapper[_,_,_,_]]);
     jobConf.setReducerClass(classOf[ReduceWrapper[_,_,_,_]]);
     
-    println(mk2.erasure);
-    println(mv2.erasure);
-    println(mk3.erasure);
-    println(mv3.erasure);
-
     jobConf.setMapOutputKeyClass(Magic.classToWritableClass(mk2.erasure));
     jobConf.setMapOutputValueClass(Magic.classToWritableClass(mv2.erasure));
     jobConf.setOutputKeyClass(Magic.classToWritableClass(mk3.erasure));
@@ -183,8 +178,10 @@ object Hadoop {
 
 
 
-  private[hadoop] type DefaultKeyWritable = LongWritable;
-  private[hadoop] type DefaultKey= Long;
+  private[hadoop] type DefaultKeyWritable = IntWritable;
+  private[hadoop] type DefaultKey= Int;
+  private[hadoop] def mkDefaultKey()  : DefaultKey= 0.asInstanceOf[DefaultKey];
+  private[hadoop] def mkDefaultKey[V](v: V): DefaultKey = v.asInstanceOf[AnyRef].hashCode();
 }
 
 

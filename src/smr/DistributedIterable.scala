@@ -23,57 +23,52 @@
 */
 package smr;
 
-trait DistributedIterable[+T] extends Iterable[T] {
-  override def map[B](f : T=>B) : DistributedIterable[B] = null;
-  override def flatMap[U](f : T=>Iterable[U]) : DistributedIterable[U] = null;
-  override def filter(f : T=>Boolean) : DistributedIterable[T] = null;
+import scala.reflect.Manifest;
+
+/**
+ * A variant of {@link scala.Iterable} that's more amenable to distribution.
+ * The design goal is to make these lazy by default, but the ActorDistributor 
+ * returns eager iterables at the moment.
+ */
+trait DistributedIterable[+T] { self =>
+  def elements : Iterator[T];
+  def map[B](f : T=>B)(implicit m : Manifest[B]): DistributedIterable[B];
+  def flatMap[U](f : T=>Iterable[U])(implicit m: Manifest[U]) : DistributedIterable[U];
+  def filter(f : T=>Boolean) : DistributedIterable[T];
+
+  /**
+   * Process any computations that have been cached and return a new
+   * DistributedIterable with those results.
+   */
+  def force() : DistributedIterable[T];
+
   /**
    * Sadly, both versions of reduce in the Scala libs are not fully associative,
    * which is required for a parallel reduce. This version of reduce demands 
    * that the operators are associative.
    */
-  def reduce[B >: T](f : (B,B)=>B) : B;
-
-  /**
-   * Can do a map and a reduce in a single step. Useful for large data sets.
-   */
-  def mapReduce[U,R>:U](m : T=>U)(r : (R,R)=>R) : R = this.map(m).reduce(r);
+  def reduce[B >: T](f : (B,B)=>B): B;
 
   /**
   * for each element, reshard the data by group(t)'s hashcode and create a new 
   * Iterable with those elements.
   */
-  def groupBy[U](group : T=>U) : DistributedIterable[(U,Iterable[T])];
+  //def groupBy[U](group : T=>U) : DistributedIterable[(U,Iterable[T])];
 
   /**
   * Removes all copies of the elements.
   */
   def distinct() : DistributedIterable[T];
 
-  /**
-   * Returns a "lazy" DistributedIterable that does not invoke the supplied 
-   * operation until another non-lazy operation is applied.
-   * Because this whole library is designed for large memory tasks,
-   * using a lazyMap is occasionally useful.
-   * 
-   * A lazyMap followed by a reduce is the same as a mapReduce.
-   *
-   */
-  def lazyMap[U](f : T=>U) :DistributedIterable[U] ={
-    val parent = this;
-    new DistributedIterable[U] {
-      def elements = parent.elements.map(f);
-      override def map[C](g : U=>C) = parent.map(Util.andThen(f,g));
-      override def flatMap[C](g: U=>Iterable[C]) = parent.flatMap(Util.andThen(f,g));
-      override def filter(g: U=>Boolean) = parent.map(f).filter(g);
-      override def reduce[C >:U](g : (C,C) =>C) : C= parent.mapReduce[U,C](f)(g)
-      override def mapReduce[B,C>:B](m : U=>B)(r : (C,C)=>C) = parent.mapReduce[B,C](Util.andThen(f,m))(r);
-      override def lazyMap[C](g : U=>C) : DistributedIterable[C] = parent.lazyMap(Util.andThen(f,g));
-      // TODO: better partition
-      override def groupBy[V]( grp : U=>V) = parent.map(f).groupBy(grp);
-      override def distinct() = parent.map(f).distinct;
-    }
+  def toIterable : Iterable[T] = new Iterable[T] {
+    def elements = self.elements;
   }
+
+  // compatibility: will be removed soon:
+  @deprecated
+  def mapReduce[U,B>:U](f : T=>U)(r : (B,B)=>B)(implicit mU:Manifest[U]) = map(f).reduce(r);
+  @deprecated
+  def lazyMap[U](f : T=>U)(implicit mU:Manifest[U])= map(f);
 }
 
 

@@ -40,3 +40,18 @@ class RealReduce[T](f : (T,T)=>T) extends Reduce[DefaultKey,T,DefaultKey,T] {
     Iterator.single((k,it.reduceLeft(f)));
   }
 }
+
+/**
+* Reduce that takes (K,[V]) and returns (car[V],K)
+ */
+class KeyToValReduce[K,V] extends Reduce[K,V,V,K] {
+  override def reduce(k : K, it :  Iterator[V]) : Iterator[(V,K)] = {
+    it.take(1).map( (_,k));
+  }
+}
+
+class IdentityReduce[K,V] extends Reduce[K,V,K,V] {
+  override def reduce(k : K,  it :Iterator[V]): Iterator[(K,V)] = {
+    it.map((k,_));  
+  }
+}
