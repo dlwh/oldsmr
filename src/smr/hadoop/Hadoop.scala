@@ -98,9 +98,18 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
 
   private[hadoop] def runMapReduce[K1,V1,K2,V2,K3,V3](paths : Array[Path],
     m: Mapper[K1,V1,K2,V2],
-    r: Reduce[K2,V2,K3,V3])
+    r: Reduce[K2,V2,K3,V3]) 
+    (implicit mk2:Manifest[K2], mv2:Manifest[V2],
+             mk3:Manifest[K3], mv3:Manifest[V3]) : Array[Path]= {
+    runMapReduce(paths,m,r,Set());
+  }
+
+  private[hadoop] def runMapReduce[K1,V1,K2,V2,K3,V3](paths : Array[Path],
+    m: Mapper[K1,V1,K2,V2],
+    r: Reduce[K2,V2,K3,V3],
+    options : Set[Hadoop.Options]) 
    (implicit mk2:Manifest[K2], mv2:Manifest[V2],
-             mk3:Manifest[K3], mv3:Manifest[V3]) = {
+             mk3:Manifest[K3], mv3:Manifest[V3]) : Array[Path]= {
     implicit val jobConf = new JobConf(conf, m.getFunClass); 
 
     val outputPath = genDir;
@@ -119,6 +128,12 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     jobConf.setMapOutputValueClass(Magic.classToWritableClass(mv2.erasure));
     jobConf.setOutputKeyClass(Magic.classToWritableClass(mk3.erasure));
     jobConf.setOutputValueClass(Magic.classToWritableClass(mv3.erasure));
+
+    options foreach {
+      case ReduceCombine =>
+        jobConf.setCombinerClass(classOf[ReduceWrapper[_,_,_,_]]);
+      case x => throw new IllegalArgumentException("Illegal MapReduce Option: " + x);
+    }
 
     jobConf.setInputFormat(classOf[SequenceFileInputFormat[_,_]])
     jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]])
@@ -175,6 +190,9 @@ object Hadoop {
     ToolRunner.run(tool,args);
     (new Hadoop(conf,workDir),args);
   }
+
+  private[hadoop] sealed case class Options;
+  case object ReduceCombine extends Options;
 
 
 

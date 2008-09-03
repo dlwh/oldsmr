@@ -23,42 +23,18 @@
 */
 package smr.hadoop;
 import smr._;
-
 import org.apache.hadoop.io._;
 import org.apache.hadoop.conf._;
 import org.apache.hadoop.fs._;
 import org.apache.hadoop.util._;
 
-@serializable
-trait Reduce[-K1,-V1,+K2,+V2] {
-  def reduce(key : K1, it: Iterator[V1]): Iterator[(K2,V2)];
-}
-
-import Hadoop._;
-class RealReduce[T](f : (T,T)=>T) extends Reduce[DefaultKey,T,DefaultKey,T] { 
-  override def reduce(k: DefaultKey, it :Iterator[T]) : Iterator[(DefaultKey,T)] = {
-    Iterator.single((k,it.reduceLeft(f)));
-  }
-}
-
+import Hadoop.DefaultKey;
 /**
-* Reduce that takes (K,[V]) and returns (car[V],K)
+ * A fairly default mapper that only modifies values.
+ * Ignores input key, and uses the default key for output.
  */
-class KeyToValReduce[K,V] extends Reduce[K,V,V,K] {
-  override def reduce(k : K, it :  Iterator[V]) : Iterator[(V,K)] = {
-    it.take(1).map( (_,k));
-  }
-}
+class PairTransformMapper[K1,V1,K2,V2](f:Iterator[(K1,V1)]=>Iterator[(K2,V2)]) extends Mapper[K1,V1,K2,V2] {
+  override def map(it : Iterator[(K1,V1)]):Iterator[(K2,V2)] = f(it)
 
-class IdentityReduce[K,V] extends Reduce[K,V,K,V] {
-  override def reduce(k : K,  it :Iterator[V]): Iterator[(K,V)] = {
-    it.map((k,_));  
-  }
-}
-
-/**
- * Very simple wrapper class that exposes Hadoop's Reduce more or less exactly.
- */
-class HReduce[K1,V1,K2,V2](f : (K1,Iterator[V1])=>Iterator[(K2,V2)]) extends Reduce[K1,V1,K2,V2] {
-  def reduce(key : K1, it : Iterator[V1]) = f(key,it);
+  override def getFunClass = f.getClass;
 }

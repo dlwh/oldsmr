@@ -57,11 +57,10 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
 
   def force = this;
 
-  import PathIterable._;
   import Hadoop._;
   def reduce[B>:T](f: (B,B)=>B) : B = { 
     implicit val b = m.asInstanceOf[Manifest[B]];
-    val output = h.runMapReduce(paths, new CollectorMapper(reduceFun(f)), new RealReduce(f));
+    val output = h.runMapReduce(paths, new CollectorMapper(identity[Iterator[B]]), new RealReduce(f), Set(ReduceCombine));
     val path = output(0);
 
     val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);
@@ -150,8 +149,9 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
       case None =>
       implicit val b = m.asInstanceOf[Manifest[B]];
       val output = h.runMapReduce(paths,
-                                  new CollectorMapper(Util.andThen(transform,reduceFun(f))),
-                                  new RealReduce(f));
+                                  new CollectorMapper(transform),
+                                  new RealReduce(f),
+                                  Set(ReduceCombine));
       val path = output(0);
 
       val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);
@@ -161,11 +161,5 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
       result.close();
       Magic.wireToReal(v).asInstanceOf[B];
     }
-  }
-}
-
-private[smr] object PathIterable {
-  def reduceFun[T](f : (T,T)=>T) = { (it:Iterator[T])=>
-    Iterator.single(it.reduceLeft(f));
   }
 }
