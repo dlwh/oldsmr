@@ -38,7 +38,7 @@ import scala.reflect.Manifest;
 // You know it's bad when you have a class called magic
 private object Magic {
   def wireToReal(t : Writable) :Any = t match {
-    case t :Text => t.toString.asInstanceOf;
+    case t :Text => t.toString;
     case arr : ArrayWritable => arr.get().map(wireToReal);
     case t => try {
       t.asInstanceOf[{def get():Any;}].get();

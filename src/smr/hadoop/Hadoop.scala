@@ -61,6 +61,11 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
   def load[T](p : Array[Path])(implicit m : Manifest[T])= new PathIterable[T](this,p);
   def load[T](p : Path)(implicit m : Manifest[T]):PathIterable[T]= load[T](Array(p));
 
+  def loadPairs[K,V](p : Path*)(implicit mK : Manifest[K], mV: Manifest[V]) = {
+    new PathPairs[K,V](this,p.toArray);
+  }
+  def loadLines(p : Path*) = new PathPairs[Long,String](this,p.toArray) with Lines;
+
   def distribute[T](ibl : Iterable[T], numShards :Int)(implicit m : Manifest[T]) :PathIterable[T] = {
     val paths = pathGenerator(numShards);
 
@@ -100,7 +105,8 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     m: Mapper[K1,V1,K2,V2],
     r: Reduce[K2,V2,K3,V3]) 
     (implicit mk2:Manifest[K2], mv2:Manifest[V2],
-             mk3:Manifest[K3], mv3:Manifest[V3]) : Array[Path]= {
+             mk3:Manifest[K3], mv3:Manifest[V3],
+             inputFormat : Class[T] forSome {type T <: InputFormat[_,_]}) : Array[Path]= {
     runMapReduce(paths,m,r,Set());
   }
 
@@ -109,7 +115,8 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     r: Reduce[K2,V2,K3,V3],
     options : Set[Hadoop.Options]) 
    (implicit mk2:Manifest[K2], mv2:Manifest[V2],
-             mk3:Manifest[K3], mv3:Manifest[V3]) : Array[Path]= {
+             mk3:Manifest[K3], mv3:Manifest[V3],
+             inputFormat : Class[T] forSome {type T <: InputFormat[_,_]}) : Array[Path]= {
     implicit val jobConf = new JobConf(conf, m.getFunClass); 
 
     val outputPath = genDir;
@@ -135,8 +142,8 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
       case x => throw new IllegalArgumentException("Illegal MapReduce Option: " + x);
     }
 
-    jobConf.setInputFormat(classOf[SequenceFileInputFormat[_,_]])
-    jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]])
+    jobConf.setInputFormat(inputFormat);
+    jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]]);
 
     FileInputFormat.setInputPaths(jobConf, paths:_*);
     FileOutputFormat.setOutputPath(jobConf,outputPath);

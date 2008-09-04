@@ -27,6 +27,7 @@ import org.apache.hadoop.io._;
 import org.apache.hadoop.conf._;
 import org.apache.hadoop.fs._;
 import org.apache.hadoop.util._;
+import org.apache.hadoop.mapred._;
 import scala.reflect.Manifest;
 
 /**
@@ -35,24 +36,14 @@ import scala.reflect.Manifest;
  * The DefaultKey is inaccessible.
  */
 class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]) extends DistributedIterable[T] {
+  import Magic._;
   def elements = {
     if(paths.length == 0) 
       new Iterator[T] { 
         def hasNext = false;
         def next = throw new IllegalArgumentException("No elements were found!")
       }
-    else (for(p <- paths;
-            rdr = new SequenceFile.Reader(p.getFileSystem(h.conf),p,h.conf);
-            keyType = rdr.getKeyClass().asSubclass(classOf[Writable]);
-            valType = rdr.getValueClass().asSubclass(classOf[Writable]))
-          yield Util.iteratorFromProducer {() => 
-            val k = keyType.newInstance();
-            val v = valType.newInstance();
-            rdr.next(k,v) match {
-              case true => Some(Magic.wireToReal(v).asInstanceOf[T]);
-              case false=> rdr.close(); None;
-            }
-          }).reduceLeft(_++_);
+    else paths.map(loadIterator).reduceLeft(_++_)
   }
 
   def force = this;
@@ -60,6 +51,7 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
   import Hadoop._;
   def reduce[B>:T](f: (B,B)=>B) : B = { 
     implicit val b = m.asInstanceOf[Manifest[B]];
+    implicit val klass = inputFormatClass.asInstanceOf[Class[InputFormat[Any,B]]];
     val output = h.runMapReduce(paths, new CollectorMapper(identity[Iterator[B]]), new RealReduce(f), Set(ReduceCombine));
     val path = output(0);
 
@@ -75,6 +67,7 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
    * Equivalent to Set() ++ it.elements, but distributed.
    */
   def distinct() = { 
+    implicit val klass = inputFormatClass.asInstanceOf[Class[InputFormat[DefaultKey,T]]];
     val output = h.runMapReduce(paths,new SwapMapper[DefaultKey,T],new KeyToValReduce[T,DefaultKey]);
     new PathIterable(h,output);
   }
@@ -91,6 +84,33 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
   * Lazy
   */
  override def filter(f : T=>Boolean) : DistributedIterable[T] = new ProjectedIterable(Util.itFilter[T](f));
+
+  // Begin protected definitions
+  /**
+   * Loads the given path and returns and iterator that can read off objects. Defaults to SequenceFile's.
+   */
+  protected def loadIterator(p : Path): Iterator[T] = {
+    val rdr = new SequenceFile.Reader(p.getFileSystem(h.conf),p,h.conf);
+    val keyType = rdr.getKeyClass().asSubclass(classOf[Writable]);
+    val valType = rdr.getValueClass().asSubclass(classOf[Writable]);
+    Util.iteratorFromProducer {() => 
+      val k = keyType.newInstance();
+      val v = valType.newInstance();
+      if(rdr.next(k,v))  {
+        Some(wireToReal(v).asInstanceOf[T]);
+      } else {
+        rdr.close(); 
+        None;
+      }  
+    }
+  }
+
+  /**
+   * Returns the InputFormat needed to read a file
+   */
+  protected implicit def inputFormatClass : Class[C] forSome{ type C <: InputFormat[_,_]} = {
+    classOf[SequenceFileInputFormat[_,_]]
+  }
 
  /**
   * Represents a transformation on the data.
@@ -159,7 +179,10 @@ class PathIterable[T](h: Hadoop, val paths: Array[Path])(implicit m: Manifest[T]
       val k = result.getKeyClass.asSubclass(classOf[Writable]).newInstance();
       result.next(k,v);
       result.close();
-      Magic.wireToReal(v).asInstanceOf[B];
+      wireToReal(v).asInstanceOf[B];
     }
   }
+
 }
+
+

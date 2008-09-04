@@ -73,6 +73,12 @@ object Defaults extends SerializedImplicits {
     }
     override def distinct() = (Set() ++ elements).toSeq
 
+    override def force() = try {
+      it.asInstanceOf[Iterable.Projection[T]].force 
+    } catch { 
+      case e : ClassCastException => it
+    }
+
     def elements = it.elements;
   }
 
