@@ -4,7 +4,7 @@
 // dramage 2008
 //
 
-package smr;
+package smr.actors;
 
 import scala.actors.Actor
 import scala.actors.OutputChannel

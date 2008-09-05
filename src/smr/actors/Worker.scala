@@ -21,13 +21,13 @@
 * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-package smr;
+package smr.actors;
 import scala.actors.Actor;
 import scala.actors.Actor._;
 import scala.actors.Exit;
 import scala.collection.mutable.ArrayBuffer;
 import scala.collection._;
-import smr.TransActor._;
+import TransActor._;
 import scala.actors.remote.RemoteActor._;
 import scala.actors.remote.Node;
 

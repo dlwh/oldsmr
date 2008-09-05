@@ -21,7 +21,7 @@
 * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-package smr;
+package smr.actors;
 import scala.actors._;
 import scala.actors.remote.RemoteActor._;
 import scala.actors.remote.Node;
