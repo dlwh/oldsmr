@@ -33,7 +33,7 @@ import scala.reflect.Manifest;
  * 
  * @author dlwh
  */
-object Defaults extends SerializedImplicits {
+object Defaults {
 
   /**
    * Implicit shard function that provides a reasonable default in most cases. Special treatment for
