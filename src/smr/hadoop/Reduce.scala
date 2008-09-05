@@ -59,6 +59,13 @@ class IdentityReduce[K,V] extends Reduce[K,V,K,V] {
 /**
  * Very simple wrapper class that exposes Hadoop's Reduce more or less exactly.
  */
-class HReduce[K1,V1,K2,V2](f : (K1,Iterator[V1])=>Iterator[(K2,V2)]) extends Reduce[K1,V1,K2,V2] {
+class FlatReduce[K1,V1,K2,V2](f : (K1,Iterator[V1])=>Iterator[(K2,V2)]) extends Reduce[K1,V1,K2,V2] {
   def reduce(key : K1, it : Iterator[V1]) = f(key,it);
+}
+
+/**
+ * Very simple wrapper class that's like FlatReduce, but only one value per key.
+ */
+class PairReduce[K1,V1,K2,V2](f : (K1,Iterator[V1])=>(K2,V2)) extends Reduce[K1,V1,K2,V2] {
+  def reduce(key : K1, it : Iterator[V1]) = Iterator.single(f(key,it));
 }

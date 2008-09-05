@@ -53,35 +53,28 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
   def force = this;
 
   import Hadoop._;
-  def reduce[A >: K, B>:V](f : ((A,B),(A,B))=>(A,B)): (A,B) = {
-    implicit val a = mK.asInstanceOf[Manifest[A]];
-    implicit val b = mV.asInstanceOf[Manifest[B]];
-
-    val output = h.runMapReduce(paths, new PairCollectorMapper(identity[Iterator[(A,B)]]), new RealReduce(f), Set(ReduceCombine));
-    val path = output(0);
-
-    val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);
-    val v = result.getValueClass.asSubclass(classOf[Writable]).newInstance();
-    val k = result.getKeyClass.asSubclass(classOf[Writable]).newInstance();
-    result.next(k,v);
-    result.close();
-    wireToReal(v).asInstanceOf[(K,V)];
-  }
-
   /**
    * Models MapReduce/Hadoop-style reduce more exactly.
    */
-  def hreduce[K2,V2](f : (K,Iterator[V])=>Iterator[(K2,V2)])(implicit m : Manifest[K2], mU:Manifest[V2]): DistributedPairs[K2,V2] = {
-    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new HReduce(f));
+  def flatReduce[K2,V2](f : (K,Iterator[V])=>Iterator[(K2,V2)])(implicit m : Manifest[K2], mU:Manifest[V2]): DistributedPairs[K2,V2] = {
+    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new FlatReduce(f));
     new PathPairs(h,output);
   }
 
- /**
+  /**
+  * Models MapReduce/Hadoop-style reduce more exactly.
+  */
+  def reduce[K2,V2](f: (K,Iterator[V])=>(K2,V2))(implicit mL: Manifest[K2], mW:Manifest[V2]): DistributedPairs[K2,V2] = {
+    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new PairReduce(f));
+    new PathPairs(h,output);
+  }
+
+  /**
   * Lazy
   */
- override def map[K2,V2](f : ((K,V))=>(K2,V2))(implicit mJ : Manifest[K2], mU : Manifest[V2]): DistributedPairs[K2,V2] = {
-   new ProjectedIterable[K2,V2](Util.itMap(f));
- }
+  override def map[K2,V2](f : ((K,V))=>(K2,V2))(implicit mJ : Manifest[K2], mU : Manifest[V2]): DistributedPairs[K2,V2] = {
+    new ProjectedIterable[K2,V2](Util.itMap(f));
+  }
 
  /**
   * Lazy
@@ -93,20 +86,21 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
  /**
   * Lazy
   */
- override def filter(f : ((K,V))=>Boolean) : DistributedPairs[K,V] = new ProjectedIterable(Util.itFilter[(K,V)](f));
+  override def filter(f : ((K,V))=>Boolean) : DistributedPairs[K,V] = new ProjectedIterable(Util.itFilter[(K,V)](f));
+
  /**
   * Lazy
   */
   override def mapFirst[K2](f : K=>K2)(implicit mJ: Manifest[K2]) : DistributedPairs[K2,V] = {
     new ProjectedIterable(Util.itMap { case (k,v) => (f(k),v)});
   }
- /**
+
+  /**
   * Lazy
   */
   override def mapSecond[V2](f : V=>V2)(implicit mJ: Manifest[V2]) : DistributedPairs[K,V2] = {
     new ProjectedIterable(Util.itMap{ case (k,v) => (k,f(v))});
   }
-
 
   // Begin protected definitions
   /**
@@ -135,11 +129,11 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
     classOf[SequenceFileInputFormat[_,_]].asInstanceOf[Class[InputFormat[_,_]]];
   }
     
- /**
+  /**
   * Represents a transformation on the data.
   * Caches transform when "force" or "elements" is called.
   */
- private class ProjectedIterable[K2,V2](transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mJ:Manifest[K2], mU: Manifest[V2]) extends DistributedPairs[K2,V2] {
+  private class ProjectedIterable[K2,V2](transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mJ:Manifest[K2], mU: Manifest[V2]) extends DistributedPairs[K2,V2] {
     def elements = force.elements;
 
     // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
@@ -192,34 +186,21 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
       new ProjectedIterable(Util.andThen(transform,Util.itMap[(K2,V2),(K2,V3)]{ case (k,v) => (k,f(v))}));
     }
 
-    def reduce[A>:K2, B>:V2](f: ((A,B),(A,B))=>(A,B)) : (A,B) = cache match { 
-      case Some(path) => new PathPairs[K2,V2](h,path).reduce(f);
-      case None =>
-      implicit val a = mJ.asInstanceOf[Manifest[A]];
-      implicit val b = mU.asInstanceOf[Manifest[B]];
-      // XXX todo
-      val output = h.runMapReduce(paths,
-                                  new PairCollectorMapper(transform),
-                                  new RealReduce(f),
-                                  Set(ReduceCombine));
-      val path = output(0);
-
-      val result = new SequenceFile.Reader(path.getFileSystem(h.conf),path,h.conf);
-      val v = result.getValueClass.asSubclass(classOf[Writable]).newInstance();
-      val k = result.getKeyClass.asSubclass(classOf[Writable]).newInstance();
-      result.next(k,v);
-      result.close();
-      wireToReal(v).asInstanceOf[(A,B)]
+    /**
+    * Models MapReduce/Hadoop-style reduce more exactly.
+    */
+    def flatReduce[K3,V3](f: (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
+      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new FlatReduce(f));
+      new PathPairs(h,output);
     }
 
     /**
     * Models MapReduce/Hadoop-style reduce more exactly.
     */
-    def hreduce[K3,V3](f: (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new HReduce(f));
+    def reduce[K3,V3](f: (K2,Iterator[V2])=>(K3,V3))(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
+      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new PairReduce(f));
       new PathPairs(h,output);
     }
-
   }
 }
 
@@ -239,7 +220,7 @@ trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
   override protected def loadIterator(p: Path) = {
     implicit val conf = h.conf;
 
-    val rdr =  new LineRecordReader(p.getFileSystem(h.conf).open(p),0,p.length);
+    val rdr = new LineRecordReader(p.getFileSystem(h.conf).open(p),0,p.length);
     val k = new LongWritable;
     val v = new Text;
     Util.iteratorFromProducer { () =>

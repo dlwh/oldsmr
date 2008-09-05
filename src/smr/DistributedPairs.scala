@@ -43,16 +43,14 @@ trait DistributedPairs[+K,+V] { self =>
   def force() : DistributedPairs[K,V];
 
   /**
-   * Sadly, both versions of reduce in the Scala libs are not fully associative,
-   * which is required for a parallel reduce. This version of reduce demands 
-   * that the operators are associative.
-   */
-  def reduce[A >: K, B>:V](f : ((A,B),(A,B))=>(A,B)): (A,B);
-
-  /**
    * Models MapReduce style reduce more exactly.
    */
-  def hreduce[J,U](f : (K,Iterator[V])=>Iterator[(J,U)])(implicit m : Manifest[J], mU:Manifest[U]): DistributedPairs[J,U];
+  def flatReduce[J,U](f : (K,Iterator[V])=>Iterator[(J,U)])(implicit m : Manifest[J], mU:Manifest[U]): DistributedPairs[J,U];
+
+  /**
+  * For a slightly more "classic" reduce that outputs exactly one item for each input. Still not Scala's reduce.
+  */
+  def reduce[J,U](f : (K,Iterator[V])=>(J,U))(implicit m : Manifest[J], mU:Manifest[U]): DistributedPairs[J,U];
 
   def mapFirst[J](f: K=>J)(implicit m:Manifest[J]) : DistributedPairs[J,V];
   def mapSecond[U](f: V=>U)(implicit m:Manifest[U]) : DistributedPairs[K,U];

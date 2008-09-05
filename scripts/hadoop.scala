@@ -9,8 +9,8 @@ val words = for( (off,line) <- h.loadLines(new Path("build.xml"));
               word <- line.split(" "))
             yield(word,1);
 
-val counts = words.hreduce{ (word,it) =>
-  Iterator.single((word,it.reduceLeft(_+_)));
+val counts = words.reduce{ (word,it) =>
+  (word,it.reduceLeft(_+_));
 }
 
 counts.elements foreach println;
