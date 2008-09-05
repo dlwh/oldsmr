@@ -1,0 +1,68 @@
+<project name="smr" default="all" basedir=".">
+  <property name="src.dir" value="src/"/>
+  <property name="build.dir" value="classes"/>
+  <property name="docs.dir" value="docs"/>
+
+  <!-- 3. Define project CLASSPATH. -->
+
+  <property environment="env"/>
+  <path id="project.classpath">
+    <fileset dir="${env.SCALA_HOME}/lib/">
+      <include name="*.jar"/>
+    </fileset>
+    <pathelement location="${build.dir}"/>
+    <fileset dir="${env.HADOOP_HOME}">
+      <include name="*.jar"/>
+    </fileset>
+  </path>
+
+  <!-- 4. Define scala compiler command. -->
+
+  <taskdef resource="scala/tools/ant/antlib.xml"/>
+  <!-- 5. Compiles sources by using "scalac" command. -->
+
+  <target name="compile" depends="plugin">
+    <mkdir dir="${build.dir}"/>
+
+    <!--
+      -->
+    <scalac srcdir="${src.dir}" destdir="${build.dir}"
+      classpathref="project.classpath" force="changed"
+      deprecation="yes" unchecked="yes" 
+      addparams="-Xplugin:jars/seroverride.jar -Xshow-phases"
+    >
+      <include name="**/*.scala"/>
+    </scalac>
+  </target>
+  <target name="docs">
+    <mkdir dir="${docs.dir}"/>
+    <scaladoc
+      srcdir="${src.dir}"
+      destdir="${docs.dir}"
+      deprecation="yes" unchecked="yes"
+      windowtitle="Scala MapReduce Documentation"
+      doctitle="&lt;div&gt;Scala MapReduce 0.0.3&lt;/div&gt;" >
+      <include  name="**/*.scala"/>
+    </scaladoc>
+  </target>
+
+  <target name="plugin">
+    <mkdir dir="${build.dir}"/>
+    <scalac srcdir="${src.dir}" destdir="${build.dir}"
+      classpathref="project.classpath" force="changed"
+      deprecation="yes" unchecked="yes" 
+    >
+      <include name="**/plugin/*.scala"/>
+    </scalac>
+    <mkdir dir="jars"/>
+    <jar destfile="jars/seroverride.jar">
+      <fileset dir="classes/"
+        includes="**/plugin/*.class"
+        />
+      <fileset dir="misc"/>
+    </jar>   
+  </target>   
+
+  <target name="all" depends="compile,plugin"/>
+
+</project>
