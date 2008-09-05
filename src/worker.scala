@@ -8,32 +8,23 @@ import Public._;
 import Priv._;
 
 class Worker extends Actor {
-  // intra worker communication:
-  private case class Add(shard : Int); 
+  import Worker._;
 
   def act() {
-    val manager = Actor.self;
-    val actual_worker = actor { 
-      loop {
-        react {
-          case  Do(id,s,f) => 
-          manager ! Done(id,s,f()) 
-        }
-      }
-    }
+    val actual_worker = realWorker(Actor.self);
     val accumulators = mutable.Map[JobID,Actor]();
     loop {
       react {
         case Do(id,s,f) => 
         actual_worker ! Do(id,s,f);
         case Done(id,s,r)=> 
-        accumulators.getOrElseUpdate(id,accumulator()) ! Done(id,s,r);
+        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Done(id,s,r);
         case DoneAdding(id) => 
-        accumulators.getOrElseUpdate(id,accumulator()) ! DoneAdding(id);
+        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! DoneAdding(id);
         case Retrieve(id,f) => 
-        accumulators.getOrElseUpdate(id,accumulator()) ! Retrieve(id,f);
+        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Retrieve(id,f);
         case Reserve(id,shard) => 
-        accumulators.getOrElseUpdate(id,accumulator()) ! Add(shard);
+        accumulators.getOrElseUpdate(id,Worker.accumulator()) ! Add(shard);
         case Remove(id) => 
         val a = accumulators.get(id)
         accumulators -= id;
@@ -41,8 +32,18 @@ class Worker extends Actor {
       }
     }
   }
-  
 
+}
+
+object Worker {
+  // intra worker communication:
+  private case class Add(shard : Int); 
+
+  def apply() = {
+    val w = new Worker();
+    w.start();
+    w;
+  }
   private def accumulator() = actor {
     val active = mutable.Set[Int]();
     val done = mutable.Map[Int,Any]();
@@ -75,14 +76,12 @@ class Worker extends Actor {
       }
     }
   }
-
-}
-
-object Worker {
-  def apply() = {
-    val w = new Worker();
-    w.start();
-    w;
-  }
-
+  def realWorker(manager :Actor) = actor { 
+      loop {
+        react {
+          case  Do(id,s,f) => 
+          manager ! Done(id,s,f()) 
+        }
+      }
+    }
 }
