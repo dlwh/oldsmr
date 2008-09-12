@@ -150,21 +150,37 @@ abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest
         cache = Some(outDir.listFiles);
         this;
       } else synchronized {
-        val outFiles = h.runMapReduce(paths,
-                                    new PairTransformMapper(transform),
-                                    new IdentityReduce[K2,V2](),
-                                    Set(OutputDir(output)));
-        cache = Some(outFiles);
-        (new PathPairs[K2,V2](h,outFiles))
+        cache match {
+        case Some(o)=> new PathPairs[K2,V2](h,o).asStage(output);
+        case None=>
+          val outFiles = h.runMapReduce(paths,
+                                      new PairTransformMapper(transform),
+                                      new IdentityReduce[K2,V2](),
+                                      Set(OutputDir(output)));
+          synthetic = false;
+          cache = Some(outFiles);
+          (new PathPairs[K2,V2](h,outFiles))
+        }
       }
     }
 
     /// So we don't repeat a computation unncessarily
     private var _cache : Option[Array[Path]] = None;
 
+    private var synthetic = true;
+
     // must be synchronized
     private def cache = synchronized { _cache };
-    private def cache_=(c : Option[Array[Path]]) = c;
+    private def cache_=(c : Option[Array[Path]]) = synchronized {
+      _cache = c;
+      if(synthetic) {
+        c match {
+          case _ => 
+        }
+      }
+    }
+
+    implicit val conf = h.conf;
 
     override def map[K3,V3](f : ((K2,V2))=>(K3,V3))(implicit mL: Manifest[K3], mW: Manifest[V3]): DistributedPairs[K3,V3] = cache match {
       case Some(path) => new PathPairs[K2,V2](h,path).map(f);
@@ -209,8 +225,12 @@ abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest
       new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new PairReduce(f), inputFormatClass);
     }
   }
-    
 }
+
+/**
+ * Represents pairs that have will be mapped and reduced. A complete cycle.
+ */
+// TODO: tighter integration between paths and asStage
 private class MapReducePairs[K1,V1,K2,V2,K3,V3](h : Hadoop,
   input: =>Array[Path],
   m : Mapper[K1,V1,K2,V2],
@@ -219,41 +239,53 @@ private class MapReducePairs[K1,V1,K2,V2,K3,V3](h : Hadoop,
   (implicit mk1 : Manifest[K1], mk2 : Manifest[K2], mk3:Manifest[K3],
     mv1:Manifest[V1], mv2:Manifest[V2], mv3 : Manifest[V3]) extends AbstractPairs[K3,V3](h) {
 
-    import Implicits._;
-    private implicit val conf = h.conf;
+  import Implicits._;
+  private implicit val conf = h.conf;
 
-    override lazy val paths = {
-      h.runMapReduce(input, m,r);
-    }
+  // a little ugly.
+  private var pathsRun = false;
+  override lazy val paths = {
+    synchronized {pathsRun = true; }
+    h.runMapReduce(input, m,r);
+  }
 
-    override def asStage(dir : String) : DistributedPairs[K3,V3] = {
-      val outDir = h.dirGenerator(dir);
-      if(outDir.exists) {
-        new PathPairs(h,outDir.listFiles);
-      } else synchronized {
+  override def asStage(dir : String) : DistributedPairs[K3,V3] = {
+    val outDir = h.dirGenerator(dir);
+    if(outDir.exists) {
+      new PathPairs(h,outDir.listFiles);
+    } else synchronized {
+      if(pathsRun) {
+        new PathPairs[K3,V3](h,paths).asStage(dir);  
+      } else {
         val outFiles = h.runMapReduce(input, m,r, Set(OutputDir(dir)));
         (new PathPairs[K3,V3](h,outFiles))
       }
     }
-
-    override implicit def inputFormatClass : Class[_ <: InputFormat[_,_]] = inputFormat;
-
   }
 
-class PathPairs[K,V](h: Hadoop, val paths : Array[Path])(implicit mK: Manifest[K], mV:Manifest[V]) extends AbstractPairs[K,V](h) {
+  override implicit def inputFormatClass : Class[_ <: InputFormat[_,_]] = inputFormat;
+}
+
+/**
+ * Represents a set of Paths on disk. 
+ */
+class PathPairs[K,V](h: Hadoop, val paths : Array[Path], keepFiles :Boolean)(implicit mK: Manifest[K], mV:Manifest[V]) extends AbstractPairs[K,V](h) {
   import Implicits._;
+
+  def this(h: Hadoop, paths: Array[Path])(implicit mk:Manifest[K], mv:Manifest[V]) = this(h,paths,true);
+
+  implicit val conf = h.conf;
+
   /**
   * Copies the files represented by the pathpairs to the stage directory.
   */
   def asStage(output: String) = {
-    implicit val conf = h.conf;
     val outputDir = h.dirGenerator(output);
     outputDir.mkdirs();
     val outPaths = for(p <- paths) yield new Path(outputDir,p.getName);
     new PathPairs(h,outPaths);
   }
 }
-
 
 /**
 * Used to override the default behavior of Lines
@@ -288,5 +320,3 @@ trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
     classOf[TextInputFormat].asInstanceOf[Class[InputFormat[_,_]]];
   }
 }
-
-

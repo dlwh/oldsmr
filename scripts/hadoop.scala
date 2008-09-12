@@ -1,5 +1,5 @@
 import smr.hadoop._;
-import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs._;
 
 val h = Hadoop(Array(""),new Path("output"));
 println(h.distribute(1 to 1000,3) reduce ( _+_));

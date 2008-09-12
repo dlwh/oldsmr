@@ -53,10 +53,12 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
     new Path(workDir,pref);
   });
 
-  private[smr] val cacheDir = dirGenerator("cache");
+  private[smr] val cacheDir = dirGenerator("tmp/cache");
 
   conf.set("smr.cache.dir",cacheDir.toString);
   cacheDir.mkdirs();
+  if(!conf.getBoolean(CONFIG_KEEP_FILES,false))
+    dirGenerator("tmp").deleteOnExit();
 
   def load[T](p : Array[Path])(implicit m : Manifest[T])= new PathIterable[T](this,p);
   def load[T](p : Path)(implicit m : Manifest[T]):PathIterable[T]= load[T](Array(p));
@@ -159,7 +161,7 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
   }
 
   private def genDir() = {
-    dirGenerator(nextName);
+    dirGenerator("tmp/"+nextName);
   }
 
   private def pathGenerator(numShards : Int) = {
@@ -205,6 +207,8 @@ object Hadoop {
   private[hadoop] type DefaultKey= Int;
   private[hadoop] def mkDefaultKey()  : DefaultKey= 0.asInstanceOf[DefaultKey];
   private[hadoop] def mkDefaultKey[V](v: V): DefaultKey = v.asInstanceOf[AnyRef].hashCode();
+
+  val CONFIG_KEEP_FILES = "smr.files.keep";
 
   private def copyFile(inFile : Path, outFile : Path)(implicit conf : Configuration) {
     val fs = inFile.getFileSystem(conf);
