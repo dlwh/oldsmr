@@ -30,16 +30,11 @@ import org.apache.hadoop.util._;
 import org.apache.hadoop.mapred._;
 import scala.reflect.Manifest;
 
-/**
- * Represents SequenceFiles of (K,V) pairs on disk. 
- * All operations are scheduled as MapReduces using Hadoop.runMapReduce.
- *
- * Note that the underlying representation is distinct from {@link PathIerable}. By default,
- * we assume a SequenceFile[K,V] underneath the hood.
- * 
- */
-class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] {
-  import Magic._;
+import Magic._;
+import Hadoop._;
+
+abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] { self =>
+  protected def paths : Array[Path];
 
   def elements = {
     if(paths.length == 0) 
@@ -50,23 +45,20 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
     else paths.map(loadIterator).reduceLeft(_++_);
   }
 
-  def force = this;
+  def force = new PathPairs(h,paths);
 
-  import Hadoop._;
   /**
    * Models MapReduce/Hadoop-style reduce more exactly.
    */
   def flatReduce[K2,V2](f : (K,Iterator[V])=>Iterator[(K2,V2)])(implicit m : Manifest[K2], mU:Manifest[V2]): DistributedPairs[K2,V2] = {
-    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new FlatReduce(f));
-    new PathPairs(h,output);
+    new MapReducePairs(h, self.paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new FlatReduce(f), inputFormatClass);
   }
 
   /**
   * Models MapReduce/Hadoop-style reduce more exactly.
   */
   def reduce[K2,V2](f: (K,Iterator[V])=>(K2,V2))(implicit mL: Manifest[K2], mW:Manifest[V2]): DistributedPairs[K2,V2] = {
-    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new PairReduce(f));
-    new PathPairs(h,output);
+    new MapReducePairs(h, self.paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new PairReduce(f), inputFormatClass);
   }
 
   /**
@@ -134,6 +126,7 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
   * Caches transform when "force" or "elements" is called.
   */
   private class ProjectedIterable[K2,V2](transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mJ:Manifest[K2], mU: Manifest[V2]) extends DistributedPairs[K2,V2] {
+    import Implicits._;
     def elements = force.elements;
 
     // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
@@ -147,6 +140,22 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
                                     new IdentityReduce[K2,V2]());
         cache = Some(output);
         (new PathPairs(h,output))
+      }
+    }
+
+    def asStage(output : String):DistributedPairs[K2,V2] = {
+      implicit val conf = h.conf;
+      val outDir = h.dirGenerator(output);
+      if(outDir.exists) {
+        cache = Some(outDir.listFiles);
+        this;
+      } else synchronized {
+        val outFiles = h.runMapReduce(paths,
+                                    new PairTransformMapper(transform),
+                                    new IdentityReduce[K2,V2](),
+                                    Set(OutputDir(output)));
+        cache = Some(outFiles);
+        (new PathPairs[K2,V2](h,outFiles))
       }
     }
 
@@ -189,20 +198,62 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
     /**
     * Models MapReduce/Hadoop-style reduce more exactly.
     */
-    def flatReduce[K3,V3](f: (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new FlatReduce(f));
-      new PathPairs(h,output);
+    def flatReduce[K3,V3](f : (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mK3 : Manifest[K3], mV3:Manifest[V3]): DistributedPairs[K3,V3] = {
+      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new FlatReduce(f), inputFormatClass);
     }
 
     /**
     * Models MapReduce/Hadoop-style reduce more exactly.
     */
     def reduce[K3,V3](f: (K2,Iterator[V2])=>(K3,V3))(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new PairReduce(f));
-      new PathPairs(h,output);
+      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new PairReduce(f), inputFormatClass);
     }
   }
+    
 }
+private class MapReducePairs[K1,V1,K2,V2,K3,V3](h : Hadoop,
+  input: =>Array[Path],
+  m : Mapper[K1,V1,K2,V2],
+  r : Reduce[K2,V2,K3,V3],
+  val inputFormat : Class[T] forSome {type T <: InputFormat[_,_]})
+  (implicit mk1 : Manifest[K1], mk2 : Manifest[K2], mk3:Manifest[K3],
+    mv1:Manifest[V1], mv2:Manifest[V2], mv3 : Manifest[V3]) extends AbstractPairs[K3,V3](h) {
+
+    import Implicits._;
+    private implicit val conf = h.conf;
+
+    override lazy val paths = {
+      h.runMapReduce(input, m,r);
+    }
+
+    override def asStage(dir : String) : DistributedPairs[K3,V3] = {
+      val outDir = h.dirGenerator(dir);
+      if(outDir.exists) {
+        new PathPairs(h,outDir.listFiles);
+      } else synchronized {
+        val outFiles = h.runMapReduce(input, m,r, Set(OutputDir(dir)));
+        (new PathPairs[K3,V3](h,outFiles))
+      }
+    }
+
+    override implicit def inputFormatClass : Class[_ <: InputFormat[_,_]] = inputFormat;
+
+  }
+
+class PathPairs[K,V](h: Hadoop, val paths : Array[Path])(implicit mK: Manifest[K], mV:Manifest[V]) extends AbstractPairs[K,V](h) {
+  import Implicits._;
+  /**
+  * Copies the files represented by the pathpairs to the stage directory.
+  */
+  def asStage(output: String) = {
+    implicit val conf = h.conf;
+    val outputDir = h.dirGenerator(output);
+    outputDir.mkdirs();
+    val outPaths = for(p <- paths) yield new Path(outputDir,p.getName);
+    new PathPairs(h,outPaths);
+  }
+}
+
 
 /**
 * Used to override the default behavior of Lines
@@ -237,3 +288,5 @@ trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
     classOf[TextInputFormat].asInstanceOf[Class[InputFormat[_,_]]];
   }
 }
+
+
