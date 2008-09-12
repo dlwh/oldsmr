@@ -28,7 +28,7 @@ import scala.reflect.Manifest;
 /**
  * Represents a Distributed Iterable over Pairs. Distinct from a 
  * DistributedIterable[(K,V)] because it's designed for the MapReduce framework
- * and hence only supports operations that yield pairs (except for reduce).
+ * and hence only supports operations that yield pairs.
  */
 trait DistributedPairs[+K,+V] { self =>
   def elements : Iterator[(K,V)];
@@ -58,6 +58,11 @@ trait DistributedPairs[+K,+V] { self =>
   def toIterable : Iterable[(K,V)] = new Iterable[(K,V)] {
     def elements = self.elements;
   }
+
+  /**
+  * Checkpoints a chain of operations, saving the output for later use (in say, a future run)
+  */
+  def asStage(name : String) : DistributedPairs[K,V];
 }
 
 

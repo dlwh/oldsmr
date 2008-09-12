@@ -30,16 +30,11 @@ import org.apache.hadoop.util._;
 import org.apache.hadoop.mapred._;
 import scala.reflect.Manifest;
 
-/**
- * Represents SequenceFiles of (K,V) pairs on disk. 
- * All operations are scheduled as MapReduces using Hadoop.runMapReduce.
- *
- * Note that the underlying representation is distinct from {@link PathIerable}. By default,
- * we assume a SequenceFile[K,V] underneath the hood.
- * 
- */
-class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] {
-  import Magic._;
+import Magic._;
+import Hadoop._;
+
+abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] { self =>
+  protected def paths : Array[Path];
 
   def elements = {
     if(paths.length == 0) 
@@ -50,23 +45,20 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
     else paths.map(loadIterator).reduceLeft(_++_);
   }
 
-  def force = this;
+  def force = new PathPairs(h,paths);
 
-  import Hadoop._;
   /**
    * Models MapReduce/Hadoop-style reduce more exactly.
    */
   def flatReduce[K2,V2](f : (K,Iterator[V])=>Iterator[(K2,V2)])(implicit m : Manifest[K2], mU:Manifest[V2]): DistributedPairs[K2,V2] = {
-    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new FlatReduce(f));
-    new PathPairs(h,output);
+    new MapReducePairs(h, self.paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new FlatReduce(f), inputFormatClass);
   }
 
   /**
   * Models MapReduce/Hadoop-style reduce more exactly.
   */
   def reduce[K2,V2](f: (K,Iterator[V])=>(K2,V2))(implicit mL: Manifest[K2], mW:Manifest[V2]): DistributedPairs[K2,V2] = {
-    val output = h.runMapReduce(paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new PairReduce(f));
-    new PathPairs(h,output);
+    new MapReducePairs(h, self.paths, new PairTransformMapper(identity[Iterator[(K,V)]]), new PairReduce(f), inputFormatClass);
   }
 
   /**
@@ -134,6 +126,7 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
   * Caches transform when "force" or "elements" is called.
   */
   private class ProjectedIterable[K2,V2](transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mJ:Manifest[K2], mU: Manifest[V2]) extends DistributedPairs[K2,V2] {
+    import Implicits._;
     def elements = force.elements;
 
     // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
@@ -150,12 +143,44 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
       }
     }
 
+    def asStage(output : String):DistributedPairs[K2,V2] = {
+      implicit val conf = h.conf;
+      val outDir = h.dirGenerator(output);
+      if(outDir.exists) {
+        cache = Some(outDir.listFiles);
+        this;
+      } else synchronized {
+        cache match {
+        case Some(o)=> new PathPairs[K2,V2](h,o).asStage(output);
+        case None=>
+          val outFiles = h.runMapReduce(paths,
+                                      new PairTransformMapper(transform),
+                                      new IdentityReduce[K2,V2](),
+                                      Set(OutputDir(output)));
+          synthetic = false;
+          cache = Some(outFiles);
+          (new PathPairs[K2,V2](h,outFiles))
+        }
+      }
+    }
+
     /// So we don't repeat a computation unncessarily
     private var _cache : Option[Array[Path]] = None;
 
+    private var synthetic = true;
+
     // must be synchronized
     private def cache = synchronized { _cache };
-    private def cache_=(c : Option[Array[Path]]) = c;
+    private def cache_=(c : Option[Array[Path]]) = synchronized {
+      _cache = c;
+      if(synthetic) {
+        c match {
+          case _ => 
+        }
+      }
+    }
+
+    implicit val conf = h.conf;
 
     override def map[K3,V3](f : ((K2,V2))=>(K3,V3))(implicit mL: Manifest[K3], mW: Manifest[V3]): DistributedPairs[K3,V3] = cache match {
       case Some(path) => new PathPairs[K2,V2](h,path).map(f);
@@ -189,18 +214,76 @@ class PathPairs[K,V](protected val h: Hadoop, val paths: Array[Path])(implicit m
     /**
     * Models MapReduce/Hadoop-style reduce more exactly.
     */
-    def flatReduce[K3,V3](f: (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new FlatReduce(f));
-      new PathPairs(h,output);
+    def flatReduce[K3,V3](f : (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mK3 : Manifest[K3], mV3:Manifest[V3]): DistributedPairs[K3,V3] = {
+      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new FlatReduce(f), inputFormatClass);
     }
 
     /**
     * Models MapReduce/Hadoop-style reduce more exactly.
     */
     def reduce[K3,V3](f: (K2,Iterator[V2])=>(K3,V3))(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      val output = h.runMapReduce(paths, new PairTransformMapper(transform), new PairReduce(f));
-      new PathPairs(h,output);
+      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new PairReduce(f), inputFormatClass);
     }
+  }
+}
+
+/**
+ * Represents pairs that have will be mapped and reduced. A complete cycle.
+ */
+// TODO: tighter integration between paths and asStage
+private class MapReducePairs[K1,V1,K2,V2,K3,V3](h : Hadoop,
+  input: =>Array[Path],
+  m : Mapper[K1,V1,K2,V2],
+  r : Reduce[K2,V2,K3,V3],
+  val inputFormat : Class[T] forSome {type T <: InputFormat[_,_]})
+  (implicit mk1 : Manifest[K1], mk2 : Manifest[K2], mk3:Manifest[K3],
+    mv1:Manifest[V1], mv2:Manifest[V2], mv3 : Manifest[V3]) extends AbstractPairs[K3,V3](h) {
+
+  import Implicits._;
+  private implicit val conf = h.conf;
+
+  // a little ugly.
+  private var pathsRun = false;
+  override lazy val paths = {
+    synchronized {pathsRun = true; }
+    h.runMapReduce(input, m,r);
+  }
+
+  override def asStage(dir : String) : DistributedPairs[K3,V3] = {
+    val outDir = h.dirGenerator(dir);
+    if(outDir.exists) {
+      new PathPairs(h,outDir.listFiles);
+    } else synchronized {
+      if(pathsRun) {
+        new PathPairs[K3,V3](h,paths).asStage(dir);  
+      } else {
+        val outFiles = h.runMapReduce(input, m,r, Set(OutputDir(dir)));
+        (new PathPairs[K3,V3](h,outFiles))
+      }
+    }
+  }
+
+  override implicit def inputFormatClass : Class[_ <: InputFormat[_,_]] = inputFormat;
+}
+
+/**
+ * Represents a set of Paths on disk. 
+ */
+class PathPairs[K,V](h: Hadoop, val paths : Array[Path], keepFiles :Boolean)(implicit mK: Manifest[K], mV:Manifest[V]) extends AbstractPairs[K,V](h) {
+  import Implicits._;
+
+  def this(h: Hadoop, paths: Array[Path])(implicit mk:Manifest[K], mv:Manifest[V]) = this(h,paths,true);
+
+  implicit val conf = h.conf;
+
+  /**
+  * Copies the files represented by the pathpairs to the stage directory.
+  */
+  def asStage(output: String) = {
+    val outputDir = h.dirGenerator(output);
+    outputDir.mkdirs();
+    val outPaths = for(p <- paths) yield new Path(outputDir,p.getName);
+    new PathPairs(h,outPaths);
   }
 }
 
