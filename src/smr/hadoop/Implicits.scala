@@ -46,6 +46,8 @@ trait Implicits {
     def exists() = { p.getFileSystem(conf).exists(p);}
     def listFiles() = {p.getFileSystem(conf).globStatus(new Path(p,"*")).map(_.getPath);}
     def length() = {p.getFileSystem(conf).getLength(p)}
+    def deleteOnExit() = {p.getFileSystem(conf).deleteOnExit(p)}
+    def delete() = {p.getFileSystem(conf).delete(p)}
   }
 
   implicit def recordReaderToIterator[K,V](r : RecordReader[K,V]) = new Iterator[(K,V)] {

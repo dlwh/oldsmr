@@ -40,7 +40,7 @@ import scala.reflect.Manifest;
  * Supports Hadoop operations.
  * @see Hadoop$
  */
-class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
+class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (String)=>Path) {
   // enable path conversions, and other goodies
   implicit private val cf = conf;
   import Implicits._;
@@ -53,10 +53,12 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     new Path(workDir,pref);
   });
 
-  private[smr] val cacheDir = dirGenerator("cache");
+  private[smr] val cacheDir = dirGenerator("tmp/cache");
 
   conf.set("smr.cache.dir",cacheDir.toString);
   cacheDir.mkdirs();
+  if(!conf.getBoolean(CONFIG_KEEP_FILES,false))
+    dirGenerator("tmp").deleteOnExit();
 
   def load[T](p : Array[Path])(implicit m : Manifest[T])= new PathIterable[T](this,p);
   def load[T](p : Path)(implicit m : Manifest[T]):PathIterable[T]= load[T](Array(p));
@@ -119,9 +121,17 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
              inputFormat : Class[T] forSome {type T <: InputFormat[_,_]}) : Array[Path]= {
     implicit val jobConf = new JobConf(conf, m.getFunClass); 
 
-    val outputPath = genDir;
+    var outputOption : Option[Path] =  None;
+    options foreach {
+      case ReduceCombine => jobConf.setCombinerClass(classOf[ReduceWrapper[_,_,_,_]]);
+      case OutputDir(dir) => outputOption = Some(dirGenerator(dir));
+      case x => throw new IllegalArgumentException("Illegal MapReduce Option: " + x);
+    }
 
+    val outputPath = outputOption.getOrElse(genDir);
     jobConf.setJobName("SMR-"+outputPath.getName);
+    jobConf.setInputFormat(inputFormat);
+    jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]]);
 
     val mPath = serializeClass(jobConf,outputPath.getName+"-Map.ser",m);
     val rPath = serializeClass(jobConf,outputPath.getName+"-Reduce.ser",r);
@@ -135,16 +145,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
     jobConf.setMapOutputValueClass(Magic.classToWritableClass(mv2.erasure));
     jobConf.setOutputKeyClass(Magic.classToWritableClass(mk3.erasure));
     jobConf.setOutputValueClass(Magic.classToWritableClass(mv3.erasure));
-
-    options foreach {
-      case ReduceCombine =>
-        jobConf.setCombinerClass(classOf[ReduceWrapper[_,_,_,_]]);
-      case x => throw new IllegalArgumentException("Illegal MapReduce Option: " + x);
-    }
-
-    jobConf.setInputFormat(inputFormat);
-    jobConf.setOutputFormat(classOf[SequenceFileOutputFormat[_,_]]);
-
+    
     FileInputFormat.setInputPaths(jobConf, paths:_*);
     FileOutputFormat.setOutputPath(jobConf,outputPath);
 
@@ -160,7 +161,7 @@ class Hadoop(val conf : Configuration, dirGenerator : (String)=>Path) {
   }
 
   private def genDir() = {
-    dirGenerator(nextName);
+    dirGenerator("tmp/"+nextName);
   }
 
   private def pathGenerator(numShards : Int) = {
@@ -200,13 +201,33 @@ object Hadoop {
 
   private[hadoop] sealed case class Options;
   case object ReduceCombine extends Options;
-
-
+  case class OutputDir(s : String) extends Options;
 
   private[hadoop] type DefaultKeyWritable = IntWritable;
   private[hadoop] type DefaultKey= Int;
   private[hadoop] def mkDefaultKey()  : DefaultKey= 0.asInstanceOf[DefaultKey];
   private[hadoop] def mkDefaultKey[V](v: V): DefaultKey = v.asInstanceOf[AnyRef].hashCode();
+
+  val CONFIG_KEEP_FILES = "smr.files.keep";
+
+  private def copyFile(inFile : Path, outFile : Path)(implicit conf : Configuration) {
+    val fs = inFile.getFileSystem(conf);
+    // Read from and write to new file
+    val in = fs.open(inFile);
+    val out = fs.create(outFile);
+    val COPY_BUFFER_SIZE = 4096;
+    val buffer = new Array[Byte](4096);
+    try {
+      var bytesRead = in.read(buffer);
+      while (bytesRead > 0) {
+        out.write(buffer, 0, bytesRead);
+        bytesRead = in.read(buffer);
+      }
+    } finally {
+      in.close();
+      out.close();
+    }
+  }
 }
 
 
