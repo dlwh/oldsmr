@@ -1,0 +1,4 @@
+<plugin>
+  <name>seroverride</name>
+  <classname>smr.plugin.SerOverride</classname>
+</plugin>
