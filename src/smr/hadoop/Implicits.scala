@@ -34,6 +34,8 @@ import org.apache.hadoop.mapred._;
  * See {@link Implicits$}
  */
 trait Implicits {
+
+  implicit def stringToPath(s : String) = new Path(s);
   /**
    * An awful lot of Path operations take the form p.getFileSystem(conf).doFoo(p).
    * This makes some of them look like "p.doFoo"
