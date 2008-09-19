@@ -66,7 +66,35 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
   def loadPairs[K,V](p : Path*)(implicit mK : Manifest[K], mV: Manifest[V]) = {
     new PathPairs[K,V](this,p.toArray);
   }
+
+  def loadPairs[K,V](p : Seq[Path]) = new PathPairs(this,p.toArray);
   def loadLines(p : Path*) = new PathPairs[Long,String](this,p.toArray) with Lines;
+
+  import Magic._;
+
+  def distributePairs[K,V](ibl: Iterable[(K,V)], numShards : Int)(implicit mK:Manifest[K], mV:Manifest[V]) = {
+    val paths = pathGenerator(numShards);
+    val elems = ibl.elements.map{ case(k,v) => (realToWire(k),realToWire(v))}
+
+    if(!elems.hasNext) 
+      throw new IllegalArgumentException("Empty iterable");
+    val first = elems.next;  
+
+    val writers = 
+      for(p <- paths;
+        fs = p.getFileSystem(conf);
+        wrtr = new SequenceFile.Writer(fs,conf,p,first._1.getClass,first._2.getClass)) 
+      yield wrtr;
+    var i = 0;
+    writers(i%numShards).append(first._1,first._2);
+    while(elems.hasNext) {
+      i+=1;
+      val nxt = elems.next();
+      writers(i%numShards).append(nxt._1,nxt._2);
+    }
+    writers.foreach{_.close()};
+    loadPairs[K,V](paths);
+  }
 
   def distribute[T](ibl : Iterable[T], numShards :Int)(implicit m : Manifest[T]) :PathIterable[T] = {
     val paths = pathGenerator(numShards);
