@@ -146,7 +146,7 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
     options : Set[Hadoop.Options]) 
    (implicit mk2:Manifest[K2], mv2:Manifest[V2],
              mk3:Manifest[K3], mv3:Manifest[V3],
-             inputFormat : Class[T] forSome {type T <: InputFormat[_,_]}) : Array[Path]= {
+             inputFormat : Class[T] forSome {type T <: InputFormat[_, _]}) = {
     implicit val jobConf = new JobConf(conf, m.getFunClass); 
 
     var outputOption : Option[Path] =  None;

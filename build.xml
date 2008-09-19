@@ -2,6 +2,7 @@
   <property name="src.dir" value="src/"/>
   <property name="build.dir" value="classes"/>
   <property name="docs.dir" value="docs"/>
+  <property name="plugin.dir" value="jars"/>
 
   <!-- 3. Define project CLASSPATH. -->
 
@@ -29,7 +30,7 @@
     <scalac srcdir="${src.dir}" destdir="${build.dir}"
       classpathref="project.classpath" force="changed"
       deprecation="yes" unchecked="yes" 
-      addparams="-Xplugin:jars/seroverride.jar -Xshow-phases"
+      addparams="-Xplugin:${plugin.dir}/seroverride.jar -Xshow-phases"
     >
       <include name="**/*.scala"/>
     </scalac>

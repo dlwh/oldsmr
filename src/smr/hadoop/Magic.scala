@@ -51,9 +51,9 @@ private object Magic {
     case t : Writable => t;
     case t : Int => new IntWritable(t);
     case t : Long => new LongWritable(t);
-    case t : Byte => new ByteWritable(t);
+    //case t : Byte => new ByteWritable(t);
     case t : Float => new FloatWritable(t);
-    case t : Double => new DoubleWritable(t);
+    //case t : Double => new DoubleWritable(t);
     case t : Boolean => new BooleanWritable(t);
     case t : String => new Text(t);
     case t : Array[Byte] => new BytesWritable(t);
@@ -96,8 +96,8 @@ private object Magic {
     case c if mkManifest(c) <:< CWritable => c.asInstanceOf[Class[Writable]];
     case CInt => classOf[IntWritable].asInstanceOf[Class[Writable]];
     case CLong => classOf[LongWritable].asInstanceOf[Class[Writable]];
-    case CByte => classOf[ByteWritable].asInstanceOf[Class[Writable]];
-    case CDouble => classOf[DoubleWritable].asInstanceOf[Class[Writable]];
+   // case CByte => classOf[ByteWritable].asInstanceOf[Class[Writable]];
+    //case CDouble => classOf[DoubleWritable].asInstanceOf[Class[Writable]];
     case CFloat => classOf[FloatWritable].asInstanceOf[Class[Writable]];
     case CBoolean => classOf[BooleanWritable].asInstanceOf[Class[Writable]];
     case CString => classOf[Text].asInstanceOf[Class[Writable]];

@@ -48,7 +48,14 @@ trait Implicits {
     def exists() = { p.getFileSystem(conf).exists(p);}
     def listFiles() = {p.getFileSystem(conf).globStatus(new Path(p,"*")).map(_.getPath);}
     def length() = {p.getFileSystem(conf).getLength(p)}
-    def deleteOnExit() = {p.getFileSystem(conf).deleteOnExit(p)}
+    def deleteOnExit() = {
+      Runtime.getRuntime().addShutdownHook( new Thread{
+          override def run() { 
+            p.getFileSystem(conf).delete(p)
+          } 
+        } 
+      );
+    }
     def delete() = {p.getFileSystem(conf).delete(p)}
   }
 
@@ -82,8 +89,8 @@ trait Implicits {
 
   implicit def fromWritable(w : IntWritable)  = w.get();
   implicit def fromWritable(w : LongWritable) = w.get();
-  implicit def fromWritable(w : DoubleWritable) = w.get();
-  implicit def fromWritable(w : ByteWritable) = w.get();
+  //implicit def fromWritable(w : DoubleWritable) = w.get();
+ // implicit def fromWritable(w : ByteWritable) = w.get();
   implicit def fromWritable(w : FloatWritable) = w.get();
   implicit def fromText(t : Text) = t.toString();
   implicit def fromWritable[T](w : ArrayWritable) = {
