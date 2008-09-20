@@ -93,7 +93,7 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
       writers(i%numShards).append(nxt._1,nxt._2);
     }
     writers.foreach{_.close()};
-    loadPairs[K,V](paths);
+    loadPairs[K,V](paths).asInstanceOf[PathPairs[K,V]];
   }
 
   def distribute[T](ibl : Iterable[T], numShards :Int)(implicit m : Manifest[T]) :PathIterable[T] = {

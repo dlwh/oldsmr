@@ -283,7 +283,7 @@ class PathPairs[K,V](h: Hadoop, val paths : Array[Path], keepFiles :Boolean)(imp
     val outputDir = h.dirGenerator(output);
     outputDir.mkdirs();
     val outPaths = for(p <- paths) yield new Path(outputDir,p.getName);
-    new PathPairs(h,outPaths);
+    new PathPairs[K,V](h,outPaths);
   }
 }
 

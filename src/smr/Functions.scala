@@ -63,4 +63,6 @@ object Functions {
     def hasNext = mine.hasMoreTokens;
     def next = mine.nextToken;
   }
+
+  def identityReduce[K,V]( k : K, v: Iterator[V]) = v.map( (k,_));
 }
