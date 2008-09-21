@@ -33,8 +33,8 @@ import scala.reflect.Manifest;
 import Magic._;
 import Hadoop._;
 
-abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] { self =>
-  protected def paths : Array[Path];
+abstract class AbstractPairs[K,V](val h: Hadoop)(implicit mK: Manifest[K], mV:Manifest[V]) extends DistributedPairs[K,V] with FileFormat[K,V] { self =>
+  protected[hadoop] def paths : Array[Path];
 
   def elements = {
     if(paths.length == 0) 
@@ -45,7 +45,7 @@ abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest
     else paths.map(loadIterator).reduceLeft(_++_);
   }
 
-  def force = new PathPairs(h,paths);
+  def force = new PathPairs[K,V](h,paths);
 
   /**
    * Models MapReduce/Hadoop-style reduce more exactly.
@@ -65,33 +65,33 @@ abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest
   * Lazy
   */
   override def map[K2,V2](f : ((K,V))=>(K2,V2))(implicit mJ : Manifest[K2], mU : Manifest[V2]): DistributedPairs[K2,V2] = {
-    new ProjectedIterable[K2,V2](Util.itMap(f));
+    new ProjectedPairs[K,V,K2,V2](this,Util.itMap(f));
   }
 
  /**
   * Lazy
   */
  override def flatMap[K2,V2](f : ((K,V))=>Iterable[(K2,V2)])(implicit mJ : Manifest[K2], mU : Manifest[V2]): DistributedPairs[K2,V2] = {
-   new ProjectedIterable[K2,V2](Util.itFlatMap(f));
+   new ProjectedPairs[K,V,K2,V2](this,Util.itFlatMap(f));
  }
 
  /**
   * Lazy
   */
-  override def filter(f : ((K,V))=>Boolean) : DistributedPairs[K,V] = new ProjectedIterable(Util.itFilter[(K,V)](f));
+  override def filter(f : ((K,V))=>Boolean) : DistributedPairs[K,V] = new ProjectedPairs[K,V,K,V](this,Util.itFilter[(K,V)](f));
 
  /**
   * Lazy
   */
   override def mapFirst[K2](f : K=>K2)(implicit mJ: Manifest[K2]) : DistributedPairs[K2,V] = {
-    new ProjectedIterable(Util.itMap { case (k,v) => (f(k),v)});
+    new ProjectedPairs[K,V,K2,V](this,Util.itMap { case (k,v) => (f(k),v)});
   }
 
   /**
   * Lazy
   */
   override def mapSecond[V2](f : V=>V2)(implicit mJ: Manifest[V2]) : DistributedPairs[K,V2] = {
-    new ProjectedIterable(Util.itMap{ case (k,v) => (k,f(v))});
+    new ProjectedPairs[K,V,K,V2](this,Util.itMap{ case (k,v) => (k,f(v))});
   }
 
   // Begin protected definitions
@@ -117,114 +117,26 @@ abstract class AbstractPairs[K,V](protected val h: Hadoop)(implicit mK: Manifest
   /**
    * Returns the InputFormat needed to read a file
    */
-  override protected implicit def inputFormatClass : Class[T] forSome{ type T <: InputFormat[_,_]} = {
+  override protected[hadoop] implicit def inputFormatClass : Class[T] forSome{ type T <: InputFormat[_,_]} = {
     classOf[SequenceFileInputFormat[_,_]].asInstanceOf[Class[InputFormat[_,_]]];
   }
-    
+
   /**
-  * Represents a transformation on the data.
-  * Caches transform when "force" or "elements" is called.
+  * Joins two PathPairs together. 
   */
-  private class ProjectedIterable[K2,V2](transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mJ:Manifest[K2], mU: Manifest[V2]) extends DistributedPairs[K2,V2] {
-    import Implicits._;
-    def elements = force.elements;
-
-    // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
-    // seems reasonable.
-    def force(): DistributedPairs[K2,V2] = synchronized {
-      cache match {
-        case Some(output)=> (new PathPairs(h,output))
-        case None =>
-        val output = h.runMapReduce(paths,
-                                    new PairTransformMapper(transform),
-                                    new IdentityReduce[K2,V2]());
-        cache = Some(output);
-        (new PathPairs(h,output))
+  def ++[SK>:K,SV>:V](other : DistributedPairs[SK,SV])(implicit mSK:Manifest[SK], mSV:Manifest[SV]) = other match {
+    case aOther : AbstractPairs[_,_] => new AbstractPairs[SK,SV](h) { 
+      protected[hadoop] override def paths = self.paths ++ aOther.paths;
+      protected[hadoop] override implicit val inputFormatClass : Class[T] forSome{ type T <: InputFormat[_,_]} = {
+        self.inputFormatClass;
       }
+
+      def asStage(name:String) : PathPairs[SK,SV] = new PathPairs[SK,SV](h,paths).asStage(name);
     }
-
-    def asStage(output : String):DistributedPairs[K2,V2] = {
-      implicit val conf = h.conf;
-      val outDir = h.dirGenerator(output);
-      if(outDir.exists) {
-        cache = Some(outDir.listFiles);
-        this;
-      } else synchronized {
-        cache match {
-        case Some(o)=> new PathPairs[K2,V2](h,o).asStage(output);
-        case None=>
-          val outFiles = h.runMapReduce(paths,
-                                      new PairTransformMapper(transform),
-                                      new IdentityReduce[K2,V2](),
-                                      Set(OutputDir(output)));
-          synthetic = false;
-          cache = Some(outFiles);
-          (new PathPairs[K2,V2](h,outFiles))
-        }
-      }
-    }
-
-    /// So we don't repeat a computation unncessarily
-    private var _cache : Option[Array[Path]] = None;
-
-    private var synthetic = true;
-
-    // must be synchronized
-    private def cache = synchronized { _cache };
-    private def cache_=(c : Option[Array[Path]]) = synchronized {
-      _cache = c;
-      if(synthetic) {
-        c match {
-          case _ => 
-        }
-      }
-    }
-
-    implicit val conf = h.conf;
-
-    override def map[K3,V3](f : ((K2,V2))=>(K3,V3))(implicit mL: Manifest[K3], mW: Manifest[V3]): DistributedPairs[K3,V3] = cache match {
-      case Some(path) => new PathPairs[K2,V2](h,path).map(f);
-      case None => new ProjectedIterable[K3,V3](Util.andThen(transform, Util.itMap(f)));
-    }
-
-    override def flatMap[K3,V3](f : ((K2,V2))=>Iterable[(K3,V3)])(implicit mL: Manifest[K3], mW: Manifest[V3]) : DistributedPairs[K3,V3] = cache match {
-      case Some(path) => new PathPairs[K2,V2](h,path).flatMap(f);
-      case _ => new ProjectedIterable[K3,V3](Util.andThen(transform,Util.itFlatMap(f)));
-    }
-
-    override def filter(f : ((K2,V2))=>Boolean) : DistributedPairs[K2,V2] = cache match {
-      case Some(path) => new PathPairs[K2,V2](h,path).filter(f);
-      case None => new ProjectedIterable[K2,V2](Util.andThen(transform,Util.itFilter(f)));
-    }
-
-    /**
-    * Lazy
-    */
-    override def mapFirst[K3](f : K2=>K3)(implicit mL: Manifest[K3]) : DistributedPairs[K3,V2] = {
-      new ProjectedIterable(Util.andThen(transform,Util.itMap[(K2,V2),(K3,V2)]{ case (k,v) => (f(k),v)}));
-    }
-
-    /**
-    * Lazy
-    */
-    override def mapSecond[V3](f : V2=>V3)(implicit mW: Manifest[V3]) : DistributedPairs[K2,V3] = {
-      new ProjectedIterable(Util.andThen(transform,Util.itMap[(K2,V2),(K2,V3)]{ case (k,v) => (k,f(v))}));
-    }
-
-    /**
-    * Models MapReduce/Hadoop-style reduce more exactly.
-    */
-    def flatReduce[K3,V3](f : (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mK3 : Manifest[K3], mV3:Manifest[V3]): DistributedPairs[K3,V3] = {
-      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new FlatReduce(f), inputFormatClass);
-    }
-
-    /**
-    * Models MapReduce/Hadoop-style reduce more exactly.
-    */
-    def reduce[K3,V3](f: (K2,Iterator[V2])=>(K3,V3))(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
-      new MapReducePairs(h, self.paths, new PairTransformMapper(transform), new PairReduce(f), inputFormatClass);
-    }
+    case _ => throw new IllegalArgumentException("++ only valid for PathPairs and cousins");
   }
+
+    
 }
 
 /**
@@ -320,3 +232,116 @@ trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
     classOf[TextInputFormat].asInstanceOf[Class[InputFormat[_,_]]];
   }
 }
+
+/**
+* Represents a transformation on the data.
+* Caches transform when "force" or "elements" is called.
+*/
+class ProjectedPairs[K,V,K2,V2](parent : AbstractPairs[K,V], transform:Iterator[(K,V)]=>Iterator[(K2,V2)])(implicit mK:Manifest[K], mV:Manifest[V], mJ:Manifest[K2], mU: Manifest[V2]) extends AbstractPairs[K2,V2](parent.h) {
+  import Implicits._;
+  override def elements = force.elements;
+
+  override protected[hadoop] def paths = force.paths;
+
+  // TODO: better to slow down one machine than repeat unnecessary work on the cluster?
+  // seems reasonable.
+  override def force() : PathPairs[K2,V2] = synchronized {
+    cache match {
+      case Some(output)=> (new PathPairs(h,output))
+      case None =>
+      val output = h.runMapReduce(paths,
+        new PairTransformMapper(transform),
+        new IdentityReduce[K2,V2]());
+      cache = Some(output);
+      (new PathPairs(h,output))
+    }
+  }
+
+  def asStage(output : String):DistributedPairs[K2,V2] = {
+    implicit val conf = h.conf;
+    val outDir = h.dirGenerator(output);
+    if(outDir.exists) {
+      cache = Some(outDir.listFiles);
+      this;
+    } else synchronized {
+      cache match {
+        case Some(o)=> new PathPairs[K2,V2](h,o).asStage(output);
+        case None=>
+        val outFiles = h.runMapReduce(paths,
+          new PairTransformMapper(transform),
+          new IdentityReduce[K2,V2](),
+          Set(OutputDir(output)));
+        synthetic = false;
+        cache = Some(outFiles);
+        (new PathPairs[K2,V2](h,outFiles))
+      }
+    }
+  }
+
+  /// So we don't repeat a computation unncessarily
+  private var _cache : Option[Array[Path]] = None;
+
+  private var synthetic = true;
+
+  // must be synchronized
+  private def cache = synchronized { _cache };
+  private def cache_=(c : Option[Array[Path]]) = synchronized {
+    _cache = c;
+    if(synthetic) {
+      c match {
+        case _ => 
+      }
+    }
+  }
+
+  implicit val conf = h.conf;
+
+  override def map[K3,V3](f : ((K2,V2))=>(K3,V3))(implicit mL: Manifest[K3], mW: Manifest[V3]): DistributedPairs[K3,V3] = cache match {
+    case Some(path) => new PathPairs[K2,V2](h,path).map(f);
+    case None => new ProjectedPairs[K,V,K3,V3](parent,Util.andThen(transform, Util.itMap(f)));
+  }
+
+  override def flatMap[K3,V3](f : ((K2,V2))=>Iterable[(K3,V3)])(implicit mL: Manifest[K3], mW: Manifest[V3]) : DistributedPairs[K3,V3] = cache match {
+    case Some(path) => new PathPairs[K2,V2](h,path).flatMap(f);
+    case _ => new ProjectedPairs[K,V,K3,V3](parent,Util.andThen(transform,Util.itFlatMap(f)));
+  }
+
+  override def filter(f : ((K2,V2))=>Boolean) : DistributedPairs[K2,V2] = cache match {
+    case Some(path) => new PathPairs[K2,V2](h,path).filter(f);
+    case None => new ProjectedPairs[K,V,K2,V2](parent,Util.andThen(transform,Util.itFilter(f)));
+  }
+
+  /**
+  * Lazy
+  */
+  override def mapFirst[K3](f : K2=>K3)(implicit mL: Manifest[K3]) : DistributedPairs[K3,V2] = {
+    new ProjectedPairs(parent,Util.andThen(transform,Util.itMap[(K2,V2),(K3,V2)]{ case (k,v) => (f(k),v)}));
+  }
+
+  /**
+  * Lazy
+  */
+  override def mapSecond[V3](f : V2=>V3)(implicit mW: Manifest[V3]) : DistributedPairs[K2,V3] = {
+    new ProjectedPairs(parent,Util.andThen(transform,Util.itMap[(K2,V2),(K2,V3)]{ case (k,v) => (k,f(v))}));
+  }
+
+  /**
+  * Models MapReduce/Hadoop-style reduce more exactly.
+  */
+  override def flatReduce[K3,V3](f : (K2,Iterator[V2])=>Iterator[(K3,V3)])(implicit mK3 : Manifest[K3], mV3:Manifest[V3]): DistributedPairs[K3,V3] = {
+    new MapReducePairs(h, parent.paths, new PairTransformMapper(transform), new FlatReduce(f), inputFormatClass);
+  }
+
+  /**
+  * Models MapReduce/Hadoop-style reduce more exactly.
+  */
+  override def reduce[K3,V3](f: (K2,Iterator[V2])=>(K3,V3))(implicit mL: Manifest[K3], mW:Manifest[V3]): DistributedPairs[K3,V3] = {
+    new MapReducePairs(h, parent.paths, new PairTransformMapper(transform), new PairReduce(f), inputFormatClass);
+  }
+
+  override protected[hadoop] implicit def inputFormatClass : Class[T] forSome{ type T <: InputFormat[_,_]} = {
+    parent.inputFormatClass;
+  }
+}
+
+

@@ -63,6 +63,11 @@ trait DistributedPairs[+K,+V] { self =>
   * Checkpoints a chain of operations, saving the output for later use (in say, a future run)
   */
   def asStage(name : String) : DistributedPairs[K,V];
+
+  /**
+  * Appends two pairs together.
+  */
+  def ++[SK>:K,SV>:V](other : DistributedPairs[SK,SV])(implicit mSK : Manifest[SK], mSV:Manifest[SV]) : DistributedPairs[SK,SV];
 }
 
 
