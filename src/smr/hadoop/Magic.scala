@@ -59,7 +59,7 @@ private object Magic {
     case t : Array[Byte] => new BytesWritable(t);
     case x : AnyRef if x.getClass.isArray => { 
       val t = x.asInstanceOf[Array[Any]];
-      if(t.length == 0) new ObjectWritable(t);
+      if(t.length == 0) new AnyWritable(t);
       else { 
         val mapped = t.map(realToWire); 
         val classes = mapped.map(_.getClass);
@@ -67,13 +67,13 @@ private object Magic {
           // can only use ArrayWritable if all Writables are the same.
           new ArrayWritable(classes(0),mapped);
         } else {
-          // fall back on ObjectWritable
-          val mapped = t.map(new ObjectWritable(_).asInstanceOf[Writable]); 
-          new ArrayWritable(classOf[ObjectWritable],mapped);
+          // fall back on AnyWritable
+          val mapped = t.map(new AnyWritable[Any](_).asInstanceOf[Writable]); 
+          new ArrayWritable(classOf[AnyWritable[_]],mapped);
         }
       }
     }
-    case _ => new ObjectWritable(t);
+    case _ => new AnyWritable(t);
   }
 
   private val CInt = classOf[Int];
@@ -103,7 +103,7 @@ private object Magic {
     case CString => classOf[Text].asInstanceOf[Class[Writable]];
     case CArrayByte => classOf[BytesWritable].asInstanceOf[Class[Writable]];
     case CArray => classOf[ArrayWritable].asInstanceOf[Class[Writable]];
-    case _ => classOf[ObjectWritable].asInstanceOf[Class[Writable]];
+    case _ => classOf[AnyWritable[_]].asInstanceOf[Class[Writable]];
   }
 
 }

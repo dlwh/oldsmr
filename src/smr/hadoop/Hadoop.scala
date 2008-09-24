@@ -40,7 +40,7 @@ import scala.reflect.Manifest;
  * Supports Hadoop operations.
  * @see Hadoop$
  */
-class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (String)=>Path) {
+class Hadoop(val conf : Configuration, userJar :String,  private[hadoop] val dirGenerator : (String)=>Path) {
   // enable path conversions, and other goodies
   implicit private val cf = conf;
   import Implicits._;
@@ -49,14 +49,14 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
   /**
    * Constructs a Hadoop instance with the given configuration and working directory (for files)
    */
-  def this(conf : Configuration, workDir : Path) = this(conf,{(pref:String) =>
+  def this(conf : Configuration, userJar : String, workDir : Path) = this(conf,userJar, {(pref:String) =>
     new Path(workDir,pref);
   });
 
   private[smr] val cacheDir = dirGenerator("tmp/cache");
 
   conf.set("smr.cache.dir",cacheDir.toString);
-  cacheDir.mkdirs();
+ // cacheDir.mkdirs();
   if(!conf.getBoolean(CONFIG_KEEP_FILES,false))
     dirGenerator("tmp").deleteOnExit();
 
@@ -147,8 +147,8 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
    (implicit mk2:Manifest[K2], mv2:Manifest[V2],
              mk3:Manifest[K3], mv3:Manifest[V3],
              inputFormat : Class[T] forSome {type T <: InputFormat[_, _]}) = {
-    implicit val jobConf = new JobConf(conf, m.getFunClass); 
-
+    implicit val jobConf = new JobConf(conf); 
+    jobConf.setJar(userJar);
     var outputOption : Option[Path] =  None;
     options foreach {
       case ReduceCombine => jobConf.setCombinerClass(classOf[ReduceWrapper[_,_,_,_]]);
@@ -168,6 +168,8 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
 
     jobConf.setMapRunnerClass(classOf[ClosureMapper[_,_,_,_]]);
     jobConf.setReducerClass(classOf[ReduceWrapper[_,_,_,_]]);
+    jobConf.setNumReduceTasks(conf.getInt("smr.reduce.tasks.default",paths.length));
+
     
     jobConf.setMapOutputKeyClass(Magic.classToWritableClass(mk2.erasure));
     jobConf.setMapOutputValueClass(Magic.classToWritableClass(mv2.erasure));
@@ -194,7 +196,7 @@ class Hadoop(val conf : Configuration, private[hadoop] val dirGenerator : (Strin
 
   private def pathGenerator(numShards : Int) = {
     val dir = genDir();
-    dir.mkdirs();
+   // dir.mkdirs();
 
     Array.fromFunction { i => 
       new Path(dir,"part-"+i+"-of-"+numShards);
@@ -206,13 +208,13 @@ object Hadoop {
   /**
    * Create a {@link Hadoop} instance from command line args and a working directory.
    */
-  def apply(args : Array[String], workDir : Path) = fromArgs(args, workDir)._1;
+  def apply(args : Array[String], userJar : String, workDir : Path) = fromArgs(args, userJar, workDir)._1;
   
   /**
    * Create a {@link Hadoop} instance from command line args and a working directory. 
    * @return hadoop instance and remaining args
    */
-  def fromArgs(args: Array[String], workDir : Path)  = {
+  def fromArgs(args: Array[String], userJar : String, workDir : Path)  = {
     var restArgs : Array[String] = null;
     var conf : Configuration = null;
     val tool = new Configured with Tool {
@@ -224,7 +226,7 @@ object Hadoop {
       }
     }
     ToolRunner.run(tool,args);
-    (new Hadoop(conf,workDir),args);
+    (new Hadoop(conf,userJar, workDir),args);
   }
 
   private[hadoop] sealed case class Options;

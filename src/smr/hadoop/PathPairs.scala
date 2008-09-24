@@ -98,7 +98,7 @@ abstract class AbstractPairs[K,V](val h: Hadoop)(implicit mK: Manifest[K], mV:Ma
   /**
    * Loads the given path and returns and iterator that can read off objects. Defaults to SequenceFile's.
    */
-  override protected def loadIterator(p : Path): Iterator[(K,V)] = {
+  override protected[hadoop] def loadIterator(p : Path): Iterator[(K,V)] = {
     val rdr = new SequenceFile.Reader(p.getFileSystem(h.conf),p,h.conf);
     val keyType = rdr.getKeyClass().asSubclass(classOf[Writable]);
     val valType = rdr.getValueClass().asSubclass(classOf[Writable]);
@@ -195,6 +195,9 @@ class PathPairs[K,V](h: Hadoop, val paths : Array[Path], keepFiles :Boolean)(imp
     val outputDir = h.dirGenerator(output);
     outputDir.mkdirs();
     val outPaths = for(p <- paths) yield new Path(outputDir,p.getName);
+    for( (src,dst) <- paths.zip(outPaths)) {
+      src.moveTo(dst);
+    }
     new PathPairs[K,V](h,outPaths);
   }
 }
@@ -203,8 +206,8 @@ class PathPairs[K,V](h: Hadoop, val paths : Array[Path], keepFiles :Boolean)(imp
 * Used to override the default behavior of Lines
 */
 trait FileFormat[K,V] { 
-  protected def loadIterator(p: Path): Iterator[(K,V)]
-  protected def inputFormatClass : Class[T] forSome { type T <: InputFormat[_,_]}
+  protected[hadoop] def loadIterator(p: Path): Iterator[(K,V)]
+  protected[hadoop] def inputFormatClass : Class[T] forSome { type T <: InputFormat[_,_]}
 }
 
 /**
@@ -212,7 +215,7 @@ trait FileFormat[K,V] {
 */
 trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
   import Implicits._;
-  override protected def loadIterator(p: Path) = {
+  override protected[hadoop] def loadIterator(p: Path) = {
     implicit val conf = h.conf;
 
     val rdr = new LineRecordReader(p.getFileSystem(h.conf).open(p),0,p.length);
@@ -228,7 +231,7 @@ trait Lines extends FileFormat[Long,String]{ this : PathPairs[Long,String] =>
     }
   }
 
-  override protected def inputFormatClass = {
+  override protected[hadoop] def inputFormatClass = {
     classOf[TextInputFormat].asInstanceOf[Class[InputFormat[_,_]]];
   }
 }
@@ -249,7 +252,7 @@ class ProjectedPairs[K,V,K2,V2](parent : AbstractPairs[K,V], transform:Iterator[
     cache match {
       case Some(output)=> (new PathPairs(h,output))
       case None =>
-      val output = h.runMapReduce(paths,
+      val output = h.runMapReduce(parent.paths,
         new PairTransformMapper(transform),
         new IdentityReduce[K2,V2]());
       cache = Some(output);
@@ -267,7 +270,7 @@ class ProjectedPairs[K,V,K2,V2](parent : AbstractPairs[K,V], transform:Iterator[
       cache match {
         case Some(o)=> new PathPairs[K2,V2](h,o).asStage(output);
         case None=>
-        val outFiles = h.runMapReduce(paths,
+        val outFiles = h.runMapReduce(parent.paths,
           new PairTransformMapper(transform),
           new IdentityReduce[K2,V2](),
           Set(OutputDir(output)));

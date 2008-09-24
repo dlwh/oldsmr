@@ -14,6 +14,7 @@
     <pathelement location="${build.dir}"/>
     <fileset dir="${env.HADOOP_HOME}">
       <include name="*.jar"/>
+      <include name="lib/*.jar"/>
     </fileset>
   </path>
 
@@ -22,7 +23,14 @@
   <taskdef resource="scala/tools/ant/antlib.xml"/>
   <!-- 5. Compiles sources by using "scalac" command. -->
 
-  <target name="compile" depends="plugin">
+  <target name="java-silliness">
+    <javac srcdir="${src.dir}" destdir="${build.dir}"
+      classpathref="project.classpath" >
+      <include name="**/*.java"/>
+    </javac>
+  </target>
+
+  <target name="compile" depends="plugin,java-silliness">
     <mkdir dir="${build.dir}"/>
 
     <!--
@@ -64,6 +72,19 @@
     </jar>   
   </target>   
 
-  <target name="all" depends="compile,plugin"/>
+  <target name="libjar" depends="compile">
+    <jar destfile="jars/smr.jar">
+      <fileset dir="classes"/>
+    </jar>
+  </target>
+        
+  <target name="testjar" depends="compile">
+    <jar destfile="jars/smr-basic.jar">
+      <fileset dir="classes"/>
+      <fileset dir="${env.SCALA_HOME}" includes="lib/**.jar"/>
+    </jar>
+  </target>
+
+  <target name="all" depends="compile,libjar"/>
 
 </project>
