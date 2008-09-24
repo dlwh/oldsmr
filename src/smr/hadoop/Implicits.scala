@@ -49,14 +49,7 @@ trait Implicits {
     def listFiles() = {p.getFileSystem(conf).globStatus(new Path(p,"*")).map(_.getPath);}
     def length() = {p.getFileSystem(conf).getLength(p)}
     def moveTo(dst: Path) = { p.getFileSystem(conf).rename(p,dst)}
-    def deleteOnExit() = {
-      Runtime.getRuntime().addShutdownHook( new Thread{
-          override def run() { 
-            p.getFileSystem(conf).delete(p)
-          } 
-        } 
-      );
-    }
+    def deleteOnExit() = {p.getFileSystem(conf).deleteOnExit(p);}
     def delete() = {p.getFileSystem(conf).delete(p)}
   }
 
