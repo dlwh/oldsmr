@@ -3,7 +3,7 @@ package smr.hadoop;
 import org.apache.hadoop.io._;
 import java.io._;
 
-class AnyWritable[T](var value : T) extends ScrewWritableComparable { 
+class AnyWritable[T](var value : T) extends WritableComparable[AnyWritable[T]] { 
   
   def get() = value;
 
@@ -29,8 +29,7 @@ class AnyWritable[T](var value : T) extends ScrewWritableComparable {
     value = bIn.readObject.asInstanceOf[T]
   }
 
-  protected def compareX(o : Object) :Int = o.asInstanceOf[Any] match {
-    case other: AnyWritable[_] => get().asInstanceOf[{ def compareTo(o : Any): Int}].compareTo(other.value);
-    case _ => throw new IllegalArgumentException(get() + " is not comparable");
+   def compareTo(o : AnyWritable[T]) :Int = {
+    value.asInstanceOf[{ def compareTo(o : Any): Int}].compareTo(o.value);
   }
 }
